@@ -45,113 +45,75 @@ However, only the repository owner can directly change the original repository. 
 
 ---
 
-## Requirements
+## Installation and start
 
-Please install the following before using the tool:
+You do **not** need RStudio to use the app.
 
-1. R
-2. RStudio
-3. An internet connection for the first-time database setup
+To install and start the app, paste this command into your terminal:
 
-No external database server is required. DuckDB runs locally on your computer.
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.sh)"
+```
 
----
 
-## First-time setup
+The script will:
 
-### 1. Clone or download the repository
+1. check whether Git and R are installed;
+2. clone or update this repository;
+3. show the currently available languages;
+4. ask whether you want to add more languages;
+5. install the required R packages;
+6. build the local UniMorph DuckDB database;
+7. start the Shiny app in your browser.
 
-Clone the repository from GitHub, or download it as a ZIP file.
+The first run may take a few minutes because R packages and UniMorph data need to be downloaded.
 
-Then open the RStudio project file:
+Keep the terminal window open while the app is running.
+
+If the browser does not open automatically, go to:
 
 ```text
-unimorphr.Rproj
+http://127.0.0.1:3838
 ```
-
-in RStudio.
-
----
-
-### 2. Restore the R package environment
-
-In the RStudio Console, run:
-
-```r
-install.packages("renv")
-renv::restore()
-```
-
-This installs the R packages needed by the project.
-
----
-
-### 3. Build the local UniMorph database
-
-Run:
-
-```r
-source("R/setup_local_database.R")
-```
-
-This will:
-
-1. Read the list of languages from `config/languages.csv`
-2. Download the corresponding UniMorph files
-3. Build a local DuckDB database on your computer
-
-The downloaded data will be stored locally in:
-
-```text
-data/unimorph/raw/
-```
-
-The local database will be stored in:
-
-```text
-data/unimorph/unimorph.duckdb
-```
-
-These files are not uploaded to GitHub.
-
----
-
-### 4. Start the app
-
-Run:
-
-```r
-shiny::runApp()
-```
-
-Alternatively, run:
-
-```r
-source("run_app.R")
-```
-
-The app should open in RStudio or in your web browser.
-
----
 
 ## Later use
 
-After the first setup, you usually only need to run:
+To start the app again later, run the same terminal command:
 
-```r
-source("run_app.R")
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR-USERNAME/unimorph-lemma-lookup/main/install_and_run.sh)"
 ```
 
-If the database already exists, the app starts directly.
+The script will update the repository if needed and then start the app.
 
-If the database is missing, `run_app.R` will build it first.
+## Adding languages during setup
+
+During setup, the script shows the languages currently listed in:
+
+```text
+config/languages.csv
+```
+
+It then asks whether you want to add more languages.
+
+If you answer `y`, enter one language at a time, for example:
+
+```text
+swe,Swedish
+spa,Spanish
+ita,Italian
+```
+
+Press Enter on an empty line when you are done.
+
+The database will then be built using the updated language list.
 
 ---
 
 ## How to use the app
 
 1. Select a language.
-2. Enter a lemma.
+2. Enter a lemma and see drop-down recommendations.
 3. Click **Search**.
 4. Inspect the returned forms.
 5. Download the results as a CSV file if needed.
@@ -163,77 +125,6 @@ Example searches:
 | German   | `gehen` |
 | English  | `go`    |
 | French   | `aller` |
-
----
-
-## Adding more languages
-
-The list of languages is stored in:
-
-```text
-config/languages.csv
-```
-
-The file has two columns:
-
-```csv
-lang,label
-eng,English
-deu,German
-fra,French
-```
-
-To add a language, add a new row. For example:
-
-```csv
-swe,Swedish
-spa,Spanish
-ita,Italian
-nld,Dutch
-```
-
-After changing `config/languages.csv`, rebuild the database:
-
-```r
-source("R/setup_local_database.R")
-```
-
----
-
-## Project structure
-
-```text
-unimorphr/
-  app.R
-  run_app.R
-  README.md
-  renv.lock
-
-  R/
-    unimorph_backend.R
-    setup_local_database.R
-
-  config/
-    languages.csv
-
-  data/
-    unimorph/
-      raw/
-      unimorph.duckdb
-
-  output/
-```
-
-The important files are:
-
-| File                       | Purpose                                                |
-| -------------------------- | ------------------------------------------------------ |
-| `app.R`                    | Shiny app interface                                    |
-| `run_app.R`                | Easy launcher for the app                              |
-| `R/unimorph_backend.R`     | Core functions for downloading, building, and querying |
-| `R/setup_local_database.R` | Builds the local database                              |
-| `config/languages.csv`     | List of languages to include                           |
-| `renv.lock`                | Records R package versions                             |
 
 ---
 
@@ -282,14 +173,10 @@ shiny::runApp()
 Check whether the language is listed in:
 
 ```text
-config/languages.csv
+config/languages.local.csv
 ```
 
-Then rebuild the database:
-
-```r
-source("R/setup_local_database.R")
-```
+Then rebuild the database
 
 ---
 
@@ -302,36 +189,6 @@ Try checking:
 1. Whether the language code is correct
 2. Whether the lemma spelling is correct
 3. Whether the lemma exists in the UniMorph data for that language
-
----
-
-### Package installation problems
-
-Try running:
-
-```r
-renv::restore()
-```
-
-If problems remain, restart RStudio and run:
-
-```r
-install.packages("renv")
-renv::restore()
-```
-
----
-
-## Suggested workflow for contributors
-
-If you want to modify the tool:
-
-1. Fork this repository.
-2. Make changes in your fork.
-3. Test locally.
-4. Submit a pull request if you want to suggest changes to the original repository.
-
-Please do not expect direct write access to the original repository.
 
 ---
 

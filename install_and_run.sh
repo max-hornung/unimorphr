@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/max-hornung/unimorphr.git"
-APP_DIR="${APP_DIR:-$HOME/unimorph-lemma-lookup}"
+APP_DIR="${APP_DIR:-$HOME/unimorphr}"
 SHINY_PORT="${SHINY_PORT:-3838}"
 
 echo ""
