@@ -81,7 +81,7 @@ http://127.0.0.1:3838
 To start the app again later, run the same terminal command:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR-USERNAME/unimorph-lemma-lookup/main/install_and_run.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.sh)"
 ```
 
 The script will update the repository if needed and then start the app.
@@ -125,6 +125,40 @@ Example searches:
 | German   | `gehen` |
 | English  | `go`    |
 | French   | `aller` |
+
+---
+
+## Adding more languages
+
+The list of languages is stored in:
+
+```text
+config/languages.local.csv
+```
+
+The file has two columns:
+
+```csv
+lang,label
+eng,English
+deu,German
+fra,French
+```
+
+To add a language, add a new row. For example:
+
+```csv
+swe,Swedish
+spa,Spanish
+ita,Italian
+nld,Dutch
+```
+
+After changing `config/languages.local.csv`, rebuild the database:
+
+```r
+source("R/setup_local_database.R")
+```
 
 ---
 
@@ -176,7 +210,11 @@ Check whether the language is listed in:
 config/languages.local.csv
 ```
 
-Then rebuild the database
+Then rebuild the database:
+
+```r
+source("R/setup_local_database.R")
+```
 
 ---
 
@@ -189,6 +227,36 @@ Try checking:
 1. Whether the language code is correct
 2. Whether the lemma spelling is correct
 3. Whether the lemma exists in the UniMorph data for that language
+
+---
+
+### Package installation problems
+
+Try running:
+
+```r
+renv::restore()
+```
+
+If problems remain, restart RStudio and run:
+
+```r
+install.packages("renv")
+renv::restore()
+```
+
+---
+
+## Suggested workflow for contributors
+
+If you want to modify the tool:
+
+1. Fork this repository.
+2. Make changes in your fork.
+3. Test locally.
+4. Submit a pull request if you want to suggest changes to the original repository.
+
+Please do not expect direct write access to the original repository.
 
 ---
 
