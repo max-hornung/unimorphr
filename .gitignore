@@ -1,0 +1,14 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+renv/library/
+renv/staging/
+
+data/unimorph/raw/
+data/unimorph/*.duckdb
+data/unimorph/*.duckdb.wal
+
+output/
+.DS_Store
