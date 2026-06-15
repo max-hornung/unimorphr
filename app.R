@@ -24,10 +24,16 @@ ui <- fluidPage(
         choices = choices
       ),
 
-      textInput(
+      selectizeInput(
         inputId = "lemma",
         label = "Lemma",
-        value = ""
+        choices = NULL,
+        selected = NULL,
+        options = list(
+          placeholder = "Start typing a lemma...",
+          create = TRUE,
+          maxOptions = 100
+        )
       ),
 
       actionButton(
@@ -53,6 +59,19 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
+
+  observeEvent(input$lang, {
+    lemmas <- available_lemmas(input$lang)
+
+    updateSelectizeInput(
+      session = session,
+      inputId = "lemma",
+      choices = lemmas,
+      selected = character(0),
+      server = TRUE
+    )
+  }, ignoreInit = FALSE)
+
   results <- eventReactive(input$search, {
     req(input$lang)
     req(input$lemma)

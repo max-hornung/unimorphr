@@ -12,3 +12,5 @@ data/unimorph/*.duckdb.wal
 
 output/
 .DS_Store
+.positai
+config/languages.local.csv
