@@ -76,6 +76,8 @@ If the browser does not open automatically, go to:
 http://127.0.0.1:3838
 ```
 
+You will find the cloned unimorphr repo in your home directory
+
 ## Later use
 
 To start the app again later, run the same terminal command:
@@ -244,19 +246,6 @@ If problems remain, restart RStudio and run:
 install.packages("renv")
 renv::restore()
 ```
-
----
-
-## Suggested workflow for contributors
-
-If you want to modify the tool:
-
-1. Fork this repository.
-2. Make changes in your fork.
-3. Test locally.
-4. Submit a pull request if you want to suggest changes to the original repository.
-
-Please do not expect direct write access to the original repository.
 
 ---
 
