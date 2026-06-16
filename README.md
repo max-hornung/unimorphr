@@ -51,13 +51,18 @@ You do **not** need RStudio to use the app.
 
 To install and start the app, paste this command into your terminal:
 
-For macOS
-
+**For macOS**
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.sh)"
 ```
 
-For Windows
+Rebuild the database and run the shiny app after modifying the languages.csv file
+```bash
+/bin/bash "$HOME/unimorph-lemma-lookup/rebuild_and_run.sh"
+```
+
+
+**For Windows**
 ```PowerShell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.ps1'; $p=Join-Path $env:TEMP 'install_and_run.ps1'; Invoke-WebRequest $u -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p"
 ```

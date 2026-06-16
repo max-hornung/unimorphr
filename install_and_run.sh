@@ -1,32 +1,34 @@
-#!/usr/bin/env bash
+
 set -euo pipefail
 
 REPO_URL="https://github.com/max-hornung/unimorphr.git"
-APP_DIR="${APP_DIR:-$HOME/unimorph-lemma-lookup}"
+APP_DIR="${APP_DIR:-$HOME/unimorphr}"
 SHINY_PORT="${SHINY_PORT:-3838}"
+LANG_FLAG_FILE=""   # set after APP_DIR is confirmed
 
-echo ""
-echo "UniMorph Shiny app installer and launcher"
-echo "========================================"
-echo ""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+info()    { echo ""; echo ">>> $*"; }
+success() { echo "    OK: $*"; }
+warn()    { echo "    WARN: $*"; }
+die()     { echo ""; echo "ERROR: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# 1. System dependencies
+# ---------------------------------------------------------------------------
 
 install_system_dependencies() {
-  if command -v git >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1; then
-    echo "Git and R are already installed."
-    return
-  fi
+  local os
+  os="$(uname -s)"
 
-  echo "Some system dependencies are missing."
-  echo "The script will try to install Git and R."
-  echo ""
-
-  OS="$(uname -s)"
-
-  if [ "$OS" = "Darwin" ]; then
+  # ---- macOS ----------------------------------------------------------------
+  if [ "$os" = "Darwin" ]; then
     if ! command -v brew >/dev/null 2>&1; then
-      echo "Homebrew is not installed. Installing Homebrew first."
+      info "Installing Homebrew (required for Git and R on macOS)."
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
+      # shellcheck disable=SC1091
       if [ -x "/opt/homebrew/bin/brew" ]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
       elif [ -x "/usr/local/bin/brew" ]; then
@@ -34,243 +36,289 @@ install_system_dependencies() {
       fi
     fi
 
-    brew install git r
+    local brew_pkgs=()
+    command -v git      >/dev/null 2>&1 || brew_pkgs+=(git)
+    command -v Rscript  >/dev/null 2>&1 || brew_pkgs+=(r)
 
-  elif [ "$OS" = "Linux" ]; then
+    if [ "${#brew_pkgs[@]}" -gt 0 ]; then
+      info "Installing via Homebrew: ${brew_pkgs[*]}"
+      brew install "${brew_pkgs[@]}"
+    fi
+    return
+  fi
+
+  # ---- Linux ----------------------------------------------------------------
+  if [ "$os" = "Linux" ]; then
+
     if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo apt-get install -y \
+      # Debian / Ubuntu
+      # Always ensure dev headers are present — they are needed to compile
+      # R packages (especially duckdb) even if R itself is already installed.
+      info "Ensuring system build dependencies are installed (apt)."
+      sudo apt-get update -qq
+      sudo apt-get install -y --no-install-recommends \
         git \
         r-base \
         r-base-dev \
         build-essential \
         libcurl4-openssl-dev \
         libssl-dev \
-        libxml2-dev
+        libxml2-dev \
+        libfontconfig1-dev \
+        zlib1g-dev
 
     elif command -v dnf >/dev/null 2>&1; then
+      info "Ensuring system build dependencies are installed (dnf)."
       sudo dnf install -y \
-        git \
-        R \
-        R-devel \
-        gcc \
-        gcc-c++ \
-        make \
-        libcurl-devel \
-        openssl-devel \
-        libxml2-devel
+        git R R-devel gcc gcc-c++ make \
+        libcurl-devel openssl-devel libxml2-devel zlib-devel
 
     elif command -v yum >/dev/null 2>&1; then
+      info "Ensuring system build dependencies are installed (yum)."
       sudo yum install -y \
-        git \
-        R \
-        R-devel \
-        gcc \
-        gcc-c++ \
-        make \
-        libcurl-devel \
-        openssl-devel \
-        libxml2-devel
+        git R R-devel gcc gcc-c++ make \
+        libcurl-devel openssl-devel libxml2-devel zlib-devel
 
     elif command -v pacman >/dev/null 2>&1; then
+      info "Ensuring system build dependencies are installed (pacman)."
       sudo pacman -Sy --noconfirm \
-        git \
-        r \
-        base-devel \
-        curl \
-        openssl \
-        libxml2
+        git r base-devel curl openssl libxml2 zlib
 
     else
-      echo "Could not detect a supported Linux package manager."
-      echo "Please install Git and R manually, then run this command again."
-      exit 1
+      warn "Could not detect a supported package manager."
+      warn "Please install Git, R, and R development headers manually."
     fi
-
-  else
-    echo "Unsupported operating system: $OS"
-    echo "Please install Git and R manually, then run this command again."
-    exit 1
+    return
   fi
+
+  die "Unsupported operating system: $os — please install Git and R manually."
 }
 
 check_required_commands() {
-  if ! command -v git >/dev/null 2>&1; then
-    echo "Git is still not available."
-    echo "Please install Git manually, then run this command again."
-    exit 1
-  fi
-
-  if ! command -v Rscript >/dev/null 2>&1; then
-    echo "Rscript is still not available."
-    echo "Please install R manually, then run this command again."
-    exit 1
-  fi
+  command -v git     >/dev/null 2>&1 || die "git is not available. Install it and re-run."
+  command -v Rscript >/dev/null 2>&1 || die "Rscript is not available. Install R and re-run."
 }
+
+# ---------------------------------------------------------------------------
+# 2. Clone / update repo
+# ---------------------------------------------------------------------------
 
 clone_or_update_repo() {
   if [ -d "$APP_DIR/.git" ]; then
-    echo ""
-    echo "Updating existing app folder:"
-    echo "$APP_DIR"
+    info "Updating existing repository at: $APP_DIR"
     git -C "$APP_DIR" pull --ff-only
   else
-    echo ""
-    echo "Cloning app into:"
-    echo "$APP_DIR"
+    info "Cloning repository into: $APP_DIR"
     git clone "$REPO_URL" "$APP_DIR"
   fi
 
   cd "$APP_DIR"
+
+  # Temp file used to pass LANGUAGES_CHANGED back from subshell-free context.
+  LANG_FLAG_FILE="$(mktemp)"
+  echo "0" > "$LANG_FLAG_FILE"
 }
 
+# ---------------------------------------------------------------------------
+# 3. Language configuration
+# ---------------------------------------------------------------------------
+
 show_languages() {
-  echo ""
-  echo "Current languages in config/languages.csv:"
-  echo "------------------------------------------"
+  info "Languages currently in config/languages.csv"
 
   if [ ! -f "config/languages.csv" ]; then
-    echo "config/languages.csv not found."
-    echo "Creating a minimal language configuration."
+    warn "config/languages.csv not found — creating a default one."
     mkdir -p config
     printf "lang,label\neng,English\ndeu,German\nfra,French\n" > config/languages.csv
   fi
 
-  awk -F',' '
-    NR == 1 { next }
-    NF >= 2 { printf "  %s - %s\n", $1, $2 }
-  ' config/languages.csv
-
-  echo ""
+  awk -F',' 'NR>1 && NF>=2 { printf "    %-8s %s\n", $1, $2 }' config/languages.csv
 }
 
 add_more_languages() {
-  LANGUAGES_CHANGED=0
+  local answer
+  read -r -p "Add more languages before building the database? [y/N] " answer
 
-  read -r -p "Do you want to add more languages before building the database? [y/N] " ADD_LANGS
-
-  case "$ADD_LANGS" in
-    y|Y|yes|YES)
-      echo ""
-      echo "Add languages one at a time."
-      echo "Use this format:"
-      echo ""
-      echo "  swe,Swedish"
-      echo "  spa,Spanish"
-      echo "  ita,Italian"
-      echo ""
-      echo "Press Enter on an empty line when finished."
-      echo ""
-
-      while true; do
-        read -r -p "Language code and label: " LINE
-
-        if [ -z "$LINE" ]; then
-          break
-        fi
-
-        IFS=',' read -r LANG_CODE LANG_LABEL EXTRA <<< "$LINE"
-
-        LANG_CODE="$(printf "%s" "$LANG_CODE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        LANG_LABEL="$(printf "%s" "${LANG_LABEL:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-
-        if [ -z "$LANG_CODE" ]; then
-          echo "Skipping empty language code."
-          continue
-        fi
-
-        if [ -z "$LANG_LABEL" ]; then
-          LANG_LABEL="$LANG_CODE"
-        fi
-
-        if ! printf "%s" "$LANG_CODE" | grep -Eq '^[A-Za-z0-9_-]+$'; then
-          echo "Skipping invalid language code: $LANG_CODE"
-          echo "Use codes such as eng, deu, fra, swe, spa."
-          continue
-        fi
-
-        if grep -qE "^${LANG_CODE}," config/languages.csv; then
-          echo "Language already exists: $LANG_CODE"
-        else
-          printf "%s,%s\n" "$LANG_CODE" "$LANG_LABEL" >> config/languages.csv
-          echo "Added: $LANG_CODE - $LANG_LABEL"
-          LANGUAGES_CHANGED=1
-        fi
-      done
-      ;;
-
-    *)
-      echo "No extra languages added."
-      ;;
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) echo "    No extra languages added."; return ;;
   esac
 
   echo ""
-  echo "Final language list:"
-  echo "--------------------"
-  awk -F',' '
-    NR == 1 { next }
-    NF >= 2 { printf "  %s - %s\n", $1, $2 }
-  ' config/languages.csv
+  echo "    Enter one language per line in the format:  code,Label"
+  echo "    Examples:  swe,Swedish   spa,Spanish   ita,Italian"
+  echo "    Press Enter on an empty line when finished."
   echo ""
+
+  while true; do
+    read -r -p "    Language: " LINE
+    [ -z "$LINE" ] && break
+
+    IFS=',' read -r LANG_CODE LANG_LABEL _ <<< "$LINE"
+    LANG_CODE="$(echo "$LANG_CODE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    LANG_LABEL="$(echo "${LANG_LABEL:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$LANG_LABEL" ] && LANG_LABEL="$LANG_CODE"
+
+    if ! echo "$LANG_CODE" | grep -Eq '^[A-Za-z0-9_-]+$'; then
+      warn "Invalid language code '$LANG_CODE' — skipped."
+      continue
+    fi
+
+    if grep -qE "^${LANG_CODE}," config/languages.csv 2>/dev/null; then
+      warn "Already in list: $LANG_CODE"
+    else
+      printf "%s,%s\n" "$LANG_CODE" "$LANG_LABEL" >> config/languages.csv
+      echo "    Added: $LANG_CODE ($LANG_LABEL)"
+      echo "1" > "$LANG_FLAG_FILE"
+    fi
+  done
+
+  echo ""
+  echo "    Final language list:"
+  awk -F',' 'NR>1 && NF>=2 { printf "    %-8s %s\n", $1, $2 }' config/languages.csv
 }
+
+# ---------------------------------------------------------------------------
+# 4. R package installation
+# ---------------------------------------------------------------------------
 
 install_r_packages() {
-  echo "Installing required R packages if needed..."
+  info "Installing R packages."
 
-  Rscript -e '
-    options(repos = c(CRAN = "https://cloud.r-project.org"))
+  # Strategy:
+  # 1. If renv.lock exists → use renv::restore() (fast, reproducible).
+  # 2. Otherwise → install directly, but use r-universe for a pre-built
+  #    duckdb binary so macOS/Linux users don't have to wait for compilation.
 
-    pkgs <- c("shiny", "DBI", "duckdb")
-    missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if [ -f "renv.lock" ]; then
+    echo "    Found renv.lock — using renv for reproducible install."
+    echo "    This may take a few minutes on first run."
 
-    if (length(missing) > 0) {
-      message("Installing: ", paste(missing, collapse = ", "))
-      install.packages(missing)
-    } else {
-      message("All required R packages are already installed.")
-    }
-  '
-}
+    RENV_CONFIG_AUTOLOADER_ENABLED=false \
+    Rscript --vanilla -e '
+      if (!requireNamespace("renv", quietly = TRUE)) {
+        install.packages("renv", repos = "https://cloud.r-project.org")
+      }
+      renv::restore(prompt = FALSE)
+    '
+  else
+    echo "    No renv.lock found — installing packages directly."
+    echo "    duckdb will be fetched as a pre-built binary where possible."
+    echo "    This may take several minutes on first run."
 
-build_database_if_needed() {
-  DB_FILE="data/unimorph/unimorph.duckdb"
+    Rscript --vanilla -e '
+      # r-universe provides pre-built duckdb binaries for macOS and Linux,
+      # avoiding the slow source compilation that is the default on CRAN.
+      options(repos = c(
+        duckdb   = "https://duckdb.r-universe.dev",
+        CRAN     = "https://cloud.r-project.org"
+      ))
 
-  if [ "${LANGUAGES_CHANGED:-0}" = "1" ]; then
-    echo "Languages changed. Rebuilding database."
-    rm -f data/unimorph/unimorph.duckdb
-    rm -f data/unimorph/unimorph.duckdb.wal
+      pkgs    <- c("shiny", "DBI", "duckdb")
+      missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+
+      if (length(missing) == 0L) {
+        message("All required packages are already installed.")
+      } else {
+        message("Installing: ", paste(missing, collapse = ", "))
+        # type = "binary" is a no-op on Linux but speeds things up on macOS.
+        install.packages(missing, type = "binary")
+      }
+    '
   fi
 
-  if [ ! -f "$DB_FILE" ]; then
-    echo ""
-    echo "Building local UniMorph database."
-    echo "This may take a while on first run."
-    Rscript -e 'source("R/setup_local_database.R")'
-  else
-    echo "Local database already exists."
+  success "R packages ready."
+}
+
+# ---------------------------------------------------------------------------
+# 5. Database build
+# ---------------------------------------------------------------------------
+
+build_database_if_needed() {
+  local db_file="data/unimorph/unimorph.duckdb"
+  local langs_changed
+  langs_changed="$(cat "$LANG_FLAG_FILE")"
+
+  if [ "$langs_changed" = "1" ]; then
+    info "Language list changed — rebuilding database."
+    rm -f "$db_file" "${db_file}.wal"
+  fi
+
+  if [ -f "$db_file" ]; then
+    success "Database already exists — skipping build."
+    return
+  fi
+
+  info "Building local UniMorph database (downloads TSV files + imports into DuckDB)."
+  echo "    This takes 1–5 minutes depending on the number of languages and your"
+  echo "    internet speed. Progress is printed below."
+  echo ""
+
+  Rscript --vanilla -e 'source("R/setup_local_database.R")'
+
+  success "Database built at: $db_file"
+}
+
+# ---------------------------------------------------------------------------
+# 6. Port check + launch
+# ---------------------------------------------------------------------------
+
+check_port() {
+  # Try ss first, fall back to lsof, then just skip the check.
+  local busy=0
+
+  if command -v ss >/dev/null 2>&1; then
+    ss -tln 2>/dev/null | grep -q ":${SHINY_PORT} " && busy=1
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$SHINY_PORT" -sTCP:LISTEN >/dev/null 2>&1 && busy=1
+  fi
+
+  if [ "$busy" = "1" ]; then
+    warn "Port $SHINY_PORT appears to be in use."
+    warn "Set a different port with:  SHINY_PORT=4242 bash install_and_run.sh"
   fi
 }
 
 launch_app() {
-  echo ""
-  echo "Starting Shiny app."
-  echo "The terminal must stay open while the app is running."
+  check_port
+
+  info "Starting Shiny app on port $SHINY_PORT."
+  echo "    Keep this terminal open while the app is running."
+  echo "    Open your browser at:  http://127.0.0.1:${SHINY_PORT}"
+  echo "    Press Ctrl-C to stop."
   echo ""
 
-  Rscript -e '
+  SHINY_PORT="$SHINY_PORT" \
+  Rscript --vanilla -e '
     port <- as.integer(Sys.getenv("SHINY_PORT", "3838"))
-
     shiny::runApp(
       appDir = ".",
-      host = "127.0.0.1",
-      port = port,
+      host   = "127.0.0.1",
+      port   = port,
       launch.browser = function(url) {
-        message("Opening app at: ", url)
+        message("Opening: ", url)
         utils::browseURL(url)
       }
     )
   '
 }
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
+cleanup() {
+  [ -n "$LANG_FLAG_FILE" ] && rm -f "$LANG_FLAG_FILE"
+}
+trap cleanup EXIT
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "UniMorphR — installer and launcher"
+echo "==================================="
 
 install_system_dependencies
 check_required_commands
