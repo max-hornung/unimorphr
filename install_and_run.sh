@@ -5,6 +5,10 @@ REPO_URL="https://github.com/max-hornung/unimorphr.git"
 APP_DIR="${APP_DIR:-$HOME/unimorphr}"
 SHINY_PORT="${SHINY_PORT:-3838}"
 
+export RENV_CONFIG_AUTOLOADER_ENABLED=false
+export USE_BUNDLED_LIBUV=1
+export HOMEBREW_NO_AUTO_UPDATE=1
+
 echo ""
 echo "UniMorphR installer and launcher"
 echo "================================"
@@ -18,115 +22,200 @@ run_with_sudo() {
   fi
 }
 
+has_apt_package() {
+  dpkg -s "$1" >/dev/null 2>&1
+}
+
+has_rpm_package() {
+  rpm -q "$1" >/dev/null 2>&1
+}
+
+has_pacman_package() {
+  pacman -Q "$1" >/dev/null 2>&1
+}
+
+has_brew_formula() {
+  brew list --formula "$1" >/dev/null 2>&1
+}
+
+install_system_dependencies_macos() {
+  echo "Detected macOS."
+
+  if ! xcode-select -p >/dev/null 2>&1; then
+    echo ""
+    echo "Apple Command Line Tools are missing."
+    echo "Starting the installer now."
+    xcode-select --install
+    echo ""
+    echo "After the Apple Command Line Tools finish installing, rerun this command."
+    exit 1
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo ""
+    echo "Homebrew is not installed. Installing Homebrew first."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+    if [ -x "/opt/homebrew/bin/brew" ]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -x "/usr/local/bin/brew" ]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+  fi
+
+  missing=()
+
+  if ! command -v git >/dev/null 2>&1 && ! has_brew_formula git; then
+    missing+=("git")
+  fi
+
+  if ! command -v Rscript >/dev/null 2>&1 && ! has_brew_formula r; then
+    missing+=("r")
+  fi
+
+  if ! command -v pkg-config >/dev/null 2>&1 && ! has_brew_formula pkg-config; then
+    missing+=("pkg-config")
+  fi
+
+  if ! pkg-config --exists libuv >/dev/null 2>&1 && ! has_brew_formula libuv; then
+    missing+=("libuv")
+  fi
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo ""
+    echo "Installing missing macOS dependencies:"
+    printf "  %s\n" "${missing[@]}"
+    brew install "${missing[@]}"
+  else
+    echo "Required macOS dependencies already look available."
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    BREW_LIBUV_PREFIX="$(brew --prefix libuv 2>/dev/null || true)"
+
+    if [ -n "$BREW_LIBUV_PREFIX" ]; then
+      export PKG_CONFIG_PATH="$BREW_LIBUV_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    fi
+  fi
+}
+
+install_system_dependencies_linux() {
+  echo "Detected Linux."
+
+  if command -v apt-get >/dev/null 2>&1; then
+    missing=()
+
+    has_apt_package git || missing+=("git")
+    has_apt_package curl || missing+=("curl")
+    has_apt_package ca-certificates || missing+=("ca-certificates")
+    has_apt_package r-base || missing+=("r-base")
+    has_apt_package r-base-dev || missing+=("r-base-dev")
+    has_apt_package build-essential || missing+=("build-essential")
+    has_apt_package pkg-config || missing+=("pkg-config")
+    has_apt_package libuv1-dev || missing+=("libuv1-dev")
+    has_apt_package libcurl4-openssl-dev || missing+=("libcurl4-openssl-dev")
+    has_apt_package libssl-dev || missing+=("libssl-dev")
+    has_apt_package libxml2-dev || missing+=("libxml2-dev")
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo ""
+      echo "Installing missing Linux dependencies with apt-get:"
+      printf "  %s\n" "${missing[@]}"
+      run_with_sudo apt-get update
+      run_with_sudo apt-get install -y "${missing[@]}"
+    else
+      echo "Required apt packages already look installed."
+    fi
+
+  elif command -v dnf >/dev/null 2>&1; then
+    missing=()
+
+    has_rpm_package git || missing+=("git")
+    has_rpm_package curl || missing+=("curl")
+    has_rpm_package ca-certificates || missing+=("ca-certificates")
+    has_rpm_package R || missing+=("R")
+    has_rpm_package R-devel || missing+=("R-devel")
+    has_rpm_package gcc || missing+=("gcc")
+    has_rpm_package gcc-c++ || missing+=("gcc-c++")
+    has_rpm_package make || missing+=("make")
+    has_rpm_package pkgconf-pkg-config || missing+=("pkgconf-pkg-config")
+    has_rpm_package libuv-devel || missing+=("libuv-devel")
+    has_rpm_package libcurl-devel || missing+=("libcurl-devel")
+    has_rpm_package openssl-devel || missing+=("openssl-devel")
+    has_rpm_package libxml2-devel || missing+=("libxml2-devel")
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo ""
+      echo "Installing missing Linux dependencies with dnf:"
+      printf "  %s\n" "${missing[@]}"
+      run_with_sudo dnf install -y "${missing[@]}"
+    else
+      echo "Required dnf packages already look installed."
+    fi
+
+  elif command -v yum >/dev/null 2>&1; then
+    missing=()
+
+    has_rpm_package git || missing+=("git")
+    has_rpm_package curl || missing+=("curl")
+    has_rpm_package ca-certificates || missing+=("ca-certificates")
+    has_rpm_package R || missing+=("R")
+    has_rpm_package R-devel || missing+=("R-devel")
+    has_rpm_package gcc || missing+=("gcc")
+    has_rpm_package gcc-c++ || missing+=("gcc-c++")
+    has_rpm_package make || missing+=("make")
+    has_rpm_package pkgconf-pkg-config || missing+=("pkgconf-pkg-config")
+    has_rpm_package libuv-devel || missing+=("libuv-devel")
+    has_rpm_package libcurl-devel || missing+=("libcurl-devel")
+    has_rpm_package openssl-devel || missing+=("openssl-devel")
+    has_rpm_package libxml2-devel || missing+=("libxml2-devel")
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo ""
+      echo "Installing missing Linux dependencies with yum:"
+      printf "  %s\n" "${missing[@]}"
+      run_with_sudo yum install -y "${missing[@]}"
+    else
+      echo "Required yum packages already look installed."
+    fi
+
+  elif command -v pacman >/dev/null 2>&1; then
+    missing=()
+
+    has_pacman_package git || missing+=("git")
+    has_pacman_package curl || missing+=("curl")
+    has_pacman_package ca-certificates || missing+=("ca-certificates")
+    has_pacman_package r || missing+=("r")
+    has_pacman_package base-devel || missing+=("base-devel")
+    has_pacman_package pkgconf || missing+=("pkgconf")
+    has_pacman_package libuv || missing+=("libuv")
+    has_pacman_package openssl || missing+=("openssl")
+    has_pacman_package libxml2 || missing+=("libxml2")
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo ""
+      echo "Installing missing Linux dependencies with pacman:"
+      printf "  %s\n" "${missing[@]}"
+      run_with_sudo pacman -Sy --noconfirm "${missing[@]}"
+    else
+      echo "Required pacman packages already look installed."
+    fi
+
+  else
+    echo ""
+    echo "Could not detect a supported Linux package manager."
+    echo "Please install Git, R, pkg-config, libuv, curl, OpenSSL, and XML development libraries manually."
+    exit 1
+  fi
+}
+
 install_system_dependencies() {
   OS="$(uname -s)"
 
   if [ "$OS" = "Darwin" ]; then
-    echo "Detected macOS."
-
-    if ! xcode-select -p >/dev/null 2>&1; then
-      echo ""
-      echo "Apple Command Line Tools are missing."
-      echo "Starting the installer now."
-      xcode-select --install
-      echo ""
-      echo "After the Apple Command Line Tools finish installing, rerun this command."
-      exit 1
-    fi
-
-    if ! command -v brew >/dev/null 2>&1; then
-      echo ""
-      echo "Homebrew is not installed. Installing Homebrew first."
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-      if [ -x "/opt/homebrew/bin/brew" ]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-      elif [ -x "/usr/local/bin/brew" ]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-      fi
-    fi
-
-    echo ""
-    echo "Installing macOS system dependencies."
-    brew install git r libuv pkg-config
-
+    install_system_dependencies_macos
   elif [ "$OS" = "Linux" ]; then
-    echo "Detected Linux."
-
-    if command -v apt-get >/dev/null 2>&1; then
-      echo ""
-      echo "Installing Linux system dependencies with apt-get."
-      run_with_sudo apt-get update
-      run_with_sudo apt-get install -y \
-        git \
-        curl \
-        ca-certificates \
-        r-base \
-        r-base-dev \
-        build-essential \
-        pkg-config \
-        libuv1-dev \
-        libcurl4-openssl-dev \
-        libssl-dev \
-        libxml2-dev
-
-    elif command -v dnf >/dev/null 2>&1; then
-      echo ""
-      echo "Installing Linux system dependencies with dnf."
-      run_with_sudo dnf install -y \
-        git \
-        curl \
-        ca-certificates \
-        R \
-        R-devel \
-        gcc \
-        gcc-c++ \
-        make \
-        pkgconf-pkg-config \
-        libuv-devel \
-        libcurl-devel \
-        openssl-devel \
-        libxml2-devel
-
-    elif command -v yum >/dev/null 2>&1; then
-      echo ""
-      echo "Installing Linux system dependencies with yum."
-      run_with_sudo yum install -y \
-        git \
-        curl \
-        ca-certificates \
-        R \
-        R-devel \
-        gcc \
-        gcc-c++ \
-        make \
-        pkgconf-pkg-config \
-        libuv-devel \
-        libcurl-devel \
-        openssl-devel \
-        libxml2-devel
-
-    elif command -v pacman >/dev/null 2>&1; then
-      echo ""
-      echo "Installing Linux system dependencies with pacman."
-      run_with_sudo pacman -Sy --noconfirm \
-        git \
-        curl \
-        ca-certificates \
-        r \
-        base-devel \
-        pkgconf \
-        libuv \
-        openssl \
-        libxml2
-
-    else
-      echo ""
-      echo "Could not detect a supported Linux package manager."
-      echo "Please install Git, R, pkg-config, libuv, curl, OpenSSL, and XML development libraries manually."
-      exit 1
-    fi
-
+    install_system_dependencies_linux
   else
     echo ""
     echo "Unsupported operating system: $OS"
@@ -140,12 +229,12 @@ check_required_commands() {
   echo "Checking required commands."
 
   if ! command -v git >/dev/null 2>&1; then
-    echo "Git is not available after installation."
+    echo "Git is not available."
     exit 1
   fi
 
   if ! command -v Rscript >/dev/null 2>&1; then
-    echo "Rscript is not available after installation."
+    echo "Rscript is not available."
     exit 1
   fi
 
@@ -281,7 +370,6 @@ add_languages_interactively() {
 
     if printf "%s" "$LANG_LABEL" | grep -q ','; then
       echo "Skipping label because it contains a comma."
-      echo "Please use a label such as Swedish, Spanish, or Italian."
       continue
     fi
 
@@ -311,59 +399,44 @@ add_languages_interactively() {
   echo ""
 }
 
-configure_r_build_environment() {
-  export USE_BUNDLED_LIBUV=1
-
-  if command -v brew >/dev/null 2>&1; then
-    BREW_LIBUV_PREFIX="$(brew --prefix libuv 2>/dev/null || true)"
-
-    if [ -n "$BREW_LIBUV_PREFIX" ]; then
-      export PKG_CONFIG_PATH="$BREW_LIBUV_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-    fi
-  fi
-}
-
 install_r_packages() {
   echo ""
-  echo "Installing required R packages if needed."
+  echo "Checking required R packages."
 
-  configure_r_build_environment
-
-  Rscript -e '
+  Rscript --vanilla -e '
     options(repos = c(CRAN = "https://cloud.r-project.org"))
 
-    pkgs <- c("fs", "sass", "bslib", "shiny", "DBI", "duckdb")
+    pkgs <- c("shiny", "DBI", "duckdb")
     missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 
-    if (length(missing) > 0) {
-      message("Installing: ", paste(missing, collapse = ", "))
-      install.packages(missing)
-    } else {
+    if (length(missing) == 0) {
       message("All required R packages are already installed.")
+      quit(save = "no")
     }
+
+    message("Installing missing R packages: ", paste(missing, collapse = ", "))
+
+    ncpus <- max(1L, parallel::detectCores(logical = TRUE) - 1L)
+
+    install.packages(
+      missing,
+      Ncpus = ncpus
+    )
   '
 }
 
-build_database_if_needed() {
+rebuild_database() {
   DB_FILE="data/unimorph/unimorph.duckdb"
   WAL_FILE="data/unimorph/unimorph.duckdb.wal"
 
-  if [ "${LANGUAGES_CHANGED:-0}" = "1" ]; then
-    echo ""
-    echo "Languages changed. Rebuilding database."
-    rm -f "$DB_FILE"
-    rm -f "$WAL_FILE"
-  fi
+  echo ""
+  echo "Rebuilding local UniMorph database."
+  echo "This may take a while."
 
-  if [ ! -f "$DB_FILE" ]; then
-    echo ""
-    echo "Building local UniMorph database."
-    echo "This may take a while on first run."
-    Rscript -e 'source("R/setup_local_database.R")'
-  else
-    echo ""
-    echo "Local database already exists."
-  fi
+  rm -f "$DB_FILE"
+  rm -f "$WAL_FILE"
+
+  Rscript --vanilla -e 'source("R/setup_local_database.R")'
 }
 
 launch_app() {
@@ -374,7 +447,7 @@ launch_app() {
 
   export SHINY_PORT="$SHINY_PORT"
 
-  Rscript -e '
+  Rscript --vanilla -e '
     port <- as.integer(Sys.getenv("SHINY_PORT", "3838"))
 
     shiny::runApp(
@@ -395,5 +468,5 @@ clone_or_update_repo
 show_languages
 add_languages_interactively
 install_r_packages
-build_database_if_needed
+rebuild_database
 launch_app
