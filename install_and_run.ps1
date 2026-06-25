@@ -10,8 +10,8 @@ if ($ep -eq "Restricted" -or $ep -eq "Undefined") {
     Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
 }
 
-$RepoUrl = "https://github.com/max-hornung/unimorphr.git"
-$AppDir = Join-Path $env:USERPROFILE "unimorphr"
+$RepoUrl   = "https://github.com/max-hornung/unimorphr.git"
+$AppDir    = Join-Path $env:USERPROFILE "unimorphr"
 $ShinyPort = 3838
 
 Write-Host ""
@@ -21,38 +21,28 @@ Write-Host ""
 
 function Find-Git {
     $git = Get-Command git -ErrorAction SilentlyContinue
-    if ($git) {
-        return $git.Source
-    }
+    if ($git) { return $git.Source }
 
     $possible = @(
         "C:\Program Files\Git\cmd\git.exe",
         "C:\Program Files (x86)\Git\cmd\git.exe"
     )
-
     foreach ($p in $possible) {
-        if (Test-Path $p) {
-            return $p
-        }
+        if (Test-Path $p) { return $p }
     }
-
     return $null
 }
 
 function Find-Rscript {
     $rscript = Get-Command Rscript -ErrorAction SilentlyContinue
-    if ($rscript) {
-        return $rscript.Source
-    }
+    if ($rscript) { return $rscript.Source }
 
-    $possible = Get-ChildItem "C:\Program Files\R" -Recurse -Filter "Rscript.exe" -ErrorAction SilentlyContinue |
+    $possible = Get-ChildItem "C:\Program Files\R" -Recurse -Filter "Rscript.exe" `
+        -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1
 
-    if ($possible) {
-        return $possible.FullName
-    }
-
+    if ($possible) { return $possible.FullName }
     return $null
 }
 
@@ -74,16 +64,15 @@ function Ensure-Git {
 
     Write-Host "Git not found. Installing Git with winget..."
     Ensure-Winget
-
-    winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
+    winget install --id Git.Git -e --source winget `
+        --accept-package-agreements --accept-source-agreements
 
     $git = Find-Git
     if (-not $git) {
-        Write-Host "Git was installed, but could not be found in this PowerShell session."
+        Write-Host "Git was installed but could not be found in this session."
         Write-Host "Please close PowerShell, open it again, and rerun the command."
         exit 1
     }
-
     return $git
 }
 
@@ -96,39 +85,33 @@ function Ensure-R {
 
     Write-Host "R not found. Installing R with winget..."
     Ensure-Winget
-
-    winget install --id RProject.R -e --source winget --accept-package-agreements --accept-source-agreements
+    winget install --id RProject.R -e --source winget `
+        --accept-package-agreements --accept-source-agreements
 
     $rscript = Find-Rscript
     if (-not $rscript) {
-        Write-Host "R was installed, but Rscript could not be found in this PowerShell session."
+        Write-Host "R was installed but Rscript could not be found in this session."
         Write-Host "Please close PowerShell, open it again, and rerun the command."
         exit 1
     }
-
     return $rscript
 }
 
 function Clone-Or-Update-Repo {
-    param(
-        [string]$Git
-    )
+    param([string]$Git)
 
     if (Test-Path (Join-Path $AppDir ".git")) {
         Write-Host ""
-        Write-Host "Updating existing app folder:"
-        Write-Host $AppDir
+        Write-Host "Updating existing app folder: $AppDir"
         & $Git -C $AppDir pull --ff-only
     } elseif (Test-Path $AppDir) {
         Write-Host ""
-        Write-Host "The app folder already exists but is not a Git repository:"
-        Write-Host $AppDir
-        Write-Host "Please rename or delete this folder, then rerun the command."
+        Write-Host "The folder $AppDir already exists but is not a Git repository."
+        Write-Host "Please rename or delete it, then rerun the command."
         exit 1
     } else {
         Write-Host ""
-        Write-Host "Cloning app into:"
-        Write-Host $AppDir
+        Write-Host "Cloning app into: $AppDir"
         & $Git clone $RepoUrl $AppDir
     }
 
@@ -137,44 +120,36 @@ function Clone-Or-Update-Repo {
 
 function Ensure-Language-File {
     $configDir = Join-Path $AppDir "config"
-    $langFile = Join-Path $configDir "languages.csv"
+    $langFile  = Join-Path $configDir "languages.csv"
 
     if (-not (Test-Path $langFile)) {
-        Write-Host "config/languages.csv not found. Creating a minimal language file."
+        Write-Host "config/languages.csv not found. Creating a default one."
         New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-        "lang,label" | Out-File -FilePath $langFile -Encoding utf8
-        "eng,English" | Add-Content -Path $langFile -Encoding utf8
-        "deu,German" | Add-Content -Path $langFile -Encoding utf8
-        "fra,French" | Add-Content -Path $langFile -Encoding utf8
+        "lang,label"   | Out-File  -FilePath $langFile -Encoding utf8
+        "eng,English"  | Add-Content -Path $langFile -Encoding utf8
+        "deu,German"   | Add-Content -Path $langFile -Encoding utf8
+        "fra,French"   | Add-Content -Path $langFile -Encoding utf8
     }
-
     return $langFile
 }
 
 function Show-Languages {
-    param(
-        [string]$LangFile
-    )
+    param([string]$LangFile)
 
     Write-Host ""
     Write-Host "Current languages in config/languages.csv:"
     Write-Host "------------------------------------------"
-
     Import-Csv $LangFile | ForEach-Object {
-        Write-Host ("  {0} - {1}" -f $_.lang, $_.label)
+        Write-Host ("  {0,-8} {1}" -f $_.lang, $_.label)
     }
-
     Write-Host ""
 }
 
 function Add-Languages-Interactively {
-    param(
-        [string]$LangFile
-    )
+    param([string]$LangFile)
 
     $script:LanguagesChanged = $false
-
-    $answer = Read-Host "Do you want to add another language before building the database? [y/N]"
+    $answer = Read-Host "Add more languages before building the database? [y/N]"
 
     if ($answer -notmatch "^(y|Y|yes|YES)$") {
         Write-Host "No extra languages added."
@@ -183,41 +158,27 @@ function Add-Languages-Interactively {
     }
 
     Write-Host ""
-    Write-Host "Add one language at a time."
-    Write-Host "Examples:"
-    Write-Host "  swe,Swedish"
-    Write-Host "  spa,Spanish"
-    Write-Host "  ita,Italian"
-    Write-Host ""
+    Write-Host "Enter one language per line as:  code,Label"
+    Write-Host "Examples:  swe,Swedish   spa,Spanish   ita,Italian"
     Write-Host "Press Enter on an empty line when finished."
     Write-Host ""
 
     while ($true) {
-        $line = Read-Host "Language code and label"
-
-        if ([string]::IsNullOrWhiteSpace($line)) {
-            break
-        }
+        $line = Read-Host "Language"
+        if ([string]::IsNullOrWhiteSpace($line)) { break }
 
         $parts = $line.Split(",", 2)
-        $code = $parts[0].Trim().ToLower()
-
-        if ($parts.Count -gt 1) {
-            $label = $parts[1].Trim()
-        } else {
-            $label = $code
-        }
+        $code  = $parts[0].Trim().ToLower()
+        $label = if ($parts.Count -gt 1) { $parts[1].Trim() } else { $code }
 
         if ($code -notmatch "^[a-z0-9_-]+$") {
-            Write-Host "Invalid language code: $code"
-            Write-Host "Use codes such as eng, deu, fra, swe, spa."
+            Write-Host "Invalid language code: $code — use codes like eng, deu, fra."
             continue
         }
 
         $existing = Import-Csv $LangFile | Where-Object { $_.lang -eq $code }
-
         if ($existing) {
-            Write-Host "Language already exists: $code"
+            Write-Host "Already in list: $code"
             continue
         }
 
@@ -230,61 +191,44 @@ function Add-Languages-Interactively {
 }
 
 function Install-R-Packages {
-    param(
-        [string]$Rscript
-    )
+    param([string]$Rscript)
 
     Write-Host ""
     Write-Host ">>> Installing R packages."
+    Write-Host "    duckdb pre-built binary will be fetched from r-universe."
+    Write-Host "    This may take a few minutes on first run."
 
-    # renv.lock pins exact package versions so all colleagues get the same
-    # tested environment.  Generate it once with create_lockfile.R and commit it.
-    $renvLock = Join-Path $AppDir "renv.lock"
-    if (-not (Test-Path $renvLock)) {
-        Write-Host ""
-        Write-Host "ERROR: renv.lock not found in $AppDir"
-        Write-Host "Please run create_lockfile.R in your project first, then commit it:"
-        Write-Host "  Rscript --vanilla create_lockfile.R"
-        Write-Host "  git add renv.lock"
-        Write-Host "  git commit -m 'Add renv lockfile'"
-        Write-Host "  git push"
-        exit 1
-    }
-
-    Write-Host "    Found renv.lock - restoring pinned package versions."
-    Write-Host "    On first run this may take a few minutes; subsequent runs are instant."
-
-    # Step 1: install renv with --vanilla (no project hooks needed yet).
     & $Rscript --vanilla -e @"
-if (!requireNamespace('renv', quietly = TRUE)) {
-  install.packages('renv', repos = 'https://cloud.r-project.org')
+# r-universe hosts pre-built Windows binaries for duckdb, avoiding the
+# slow C++ source compilation that CRAN triggers by default on Windows.
+options(repos = c(
+  duckdb = 'https://duckdb.r-universe.dev',
+  CRAN   = 'https://cloud.r-project.org'
+))
+
+pkgs    <- c('shiny', 'DBI', 'duckdb')
+missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+
+if (length(missing) == 0L) {
+  message('All required packages are already installed.')
+} else {
+  message('Installing: ', paste(missing, collapse = ', '))
+  install.packages(missing, type = 'binary')
 }
-message('renv is available.')
 "@
-    # Step 2: restore WITHOUT --vanilla so renv's .Rprofile hook activates.
-    # --vanilla suppresses .Rprofile and makes restore() silently do nothing.
-    & $Rscript -e "renv::restore(prompt = FALSE)"
     Write-Host "    OK: R packages ready."
 }
 
 function Build-Database-If-Needed {
-    param(
-        [string]$Rscript
-    )
+    param([string]$Rscript)
 
-    $dbFile = Join-Path $AppDir "data\unimorph\unimorph.duckdb"
+    $dbFile  = Join-Path $AppDir "data\unimorph\unimorph.duckdb"
     $walFile = "$dbFile.wal"
 
     if ($script:LanguagesChanged) {
-        Write-Host "Languages changed. Rebuilding database."
-
-        if (Test-Path $dbFile) {
-            Remove-Item $dbFile -Force
-        }
-
-        if (Test-Path $walFile) {
-            Remove-Item $walFile -Force
-        }
+        Write-Host "Language list changed — rebuilding database."
+        if (Test-Path $dbFile)  { Remove-Item $dbFile  -Force }
+        if (Test-Path $walFile) { Remove-Item $walFile -Force }
     }
 
     if (-not (Test-Path $dbFile)) {
@@ -297,7 +241,7 @@ function Build-Database-If-Needed {
         & $Rscript --vanilla -e 'source("R/setup_local_database.R")'
         Write-Host "    OK: Database built."
     } else {
-        Write-Host "    OK: Database already exists - skipping build."
+        Write-Host "    OK: Database already exists — skipping build."
     }
 }
 
@@ -305,26 +249,25 @@ function Test-Port {
     param([int]$Port)
     $listener = $null
     try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+        $listener = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback, $Port)
         $listener.Start()
         $listener.Stop()
-        return $false   # port is free
+        return $false
     } catch {
-        return $true    # port is in use
+        return $true
     } finally {
         if ($listener) { try { $listener.Stop() } catch {} }
     }
 }
 
 function Launch-App {
-    param(
-        [string]$Rscript
-    )
+    param([string]$Rscript)
 
     if (Test-Port -Port $ShinyPort) {
         Write-Host ""
         Write-Host "    WARN: Port $ShinyPort appears to be in use."
-        Write-Host "    Set a different port by editing `$ShinyPort at the top of this script."
+        Write-Host "    Edit `$ShinyPort at the top of this script to use a different port."
     }
 
     Write-Host ""
@@ -338,11 +281,10 @@ function Launch-App {
 
     & $Rscript --vanilla -e @"
 port <- as.integer(Sys.getenv("SHINY_PORT", "3838"))
-
 shiny::runApp(
   appDir = ".",
-  host = "127.0.0.1",
-  port = port,
+  host   = "127.0.0.1",
+  port   = port,
   launch.browser = function(url) {
     message("Opening app at: ", url)
     utils::browseURL(url)
@@ -351,15 +293,19 @@ shiny::runApp(
 "@
 }
 
-$Git = Ensure-Git
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+$Git     = Ensure-Git
 $Rscript = Ensure-R
 
 Clone-Or-Update-Repo -Git $Git
 
 $LangFile = Ensure-Language-File
-Show-Languages -LangFile $LangFile
+Show-Languages              -LangFile $LangFile
 Add-Languages-Interactively -LangFile $LangFile
 
-Install-R-Packages -Rscript $Rscript
+Install-R-Packages      -Rscript $Rscript
 Build-Database-If-Needed -Rscript $Rscript
-Launch-App -Rscript $Rscript
+Launch-App              -Rscript $Rscript

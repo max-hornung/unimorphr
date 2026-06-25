@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_URL="https://github.com/max-hornung/unimorphr.git"
 APP_DIR="${APP_DIR:-$HOME/unimorphr}"
 SHINY_PORT="${SHINY_PORT:-3838}"
-LANG_FLAG_FILE=""   # set after APP_DIR is confirmed
+LANG_FLAG_FILE=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,12 +23,10 @@ install_system_dependencies() {
   local os
   os="$(uname -s)"
 
-  # ---- macOS ----------------------------------------------------------------
   if [ "$os" = "Darwin" ]; then
     if ! command -v brew >/dev/null 2>&1; then
       info "Installing Homebrew (required for Git and R on macOS)."
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-      # shellcheck disable=SC1091
       if [ -x "/opt/homebrew/bin/brew" ]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
       elif [ -x "/usr/local/bin/brew" ]; then
@@ -37,8 +35,8 @@ install_system_dependencies() {
     fi
 
     local brew_pkgs=()
-    command -v git      >/dev/null 2>&1 || brew_pkgs+=(git)
-    command -v Rscript  >/dev/null 2>&1 || brew_pkgs+=(r)
+    command -v git     >/dev/null 2>&1 || brew_pkgs+=(git)
+    command -v Rscript >/dev/null 2>&1 || brew_pkgs+=(r)
 
     if [ "${#brew_pkgs[@]}" -gt 0 ]; then
       info "Installing via Homebrew: ${brew_pkgs[*]}"
@@ -47,43 +45,28 @@ install_system_dependencies() {
     return
   fi
 
-  # ---- Linux ----------------------------------------------------------------
   if [ "$os" = "Linux" ]; then
-
     if command -v apt-get >/dev/null 2>&1; then
-      # Debian / Ubuntu
-      # Always ensure dev headers are present — they are needed to compile
-      # R packages (especially duckdb) even if R itself is already installed.
       info "Ensuring system build dependencies are installed (apt)."
       sudo apt-get update -qq
       sudo apt-get install -y --no-install-recommends \
-        git \
-        r-base \
-        r-base-dev \
-        build-essential \
-        libcurl4-openssl-dev \
-        libssl-dev \
-        libxml2-dev \
-        libfontconfig1-dev \
-        zlib1g-dev
-
+        git r-base r-base-dev build-essential \
+        libcurl4-openssl-dev libssl-dev libxml2-dev \
+        libfontconfig1-dev zlib1g-dev
     elif command -v dnf >/dev/null 2>&1; then
       info "Ensuring system build dependencies are installed (dnf)."
       sudo dnf install -y \
         git R R-devel gcc gcc-c++ make \
         libcurl-devel openssl-devel libxml2-devel zlib-devel
-
     elif command -v yum >/dev/null 2>&1; then
       info "Ensuring system build dependencies are installed (yum)."
       sudo yum install -y \
         git R R-devel gcc gcc-c++ make \
         libcurl-devel openssl-devel libxml2-devel zlib-devel
-
     elif command -v pacman >/dev/null 2>&1; then
       info "Ensuring system build dependencies are installed (pacman)."
       sudo pacman -Sy --noconfirm \
         git r base-devel curl openssl libxml2 zlib
-
     else
       warn "Could not detect a supported package manager."
       warn "Please install Git, R, and R development headers manually."
@@ -114,7 +97,6 @@ clone_or_update_repo() {
 
   cd "$APP_DIR"
 
-  # Temp file used to pass LANGUAGES_CHANGED back from subshell-free context.
   LANG_FLAG_FILE="$(mktemp)"
   echo "0" > "$LANG_FLAG_FILE"
 }
@@ -184,32 +166,34 @@ add_more_languages() {
 
 install_r_packages() {
   info "Installing R packages."
+  echo "    duckdb will be fetched as a pre-built binary where possible."
+  echo "    This may take a few minutes on first run."
 
-  # renv.lock pins exact package versions so all colleagues get the same
-  # tested environment.  Generate it once with create_lockfile.R and commit it.
-  if [ ! -f "renv.lock" ]; then
-    die "renv.lock not found in $APP_DIR.
-    Please run create_lockfile.R in your project first, then commit renv.lock:
-      Rscript --vanilla create_lockfile.R
-      git add renv.lock
-      git commit -m 'Add renv lockfile'
-      git push"
-  fi
-
-  echo "    Found renv.lock — restoring pinned package versions."
-  echo "    On first run this may take a few minutes; subsequent runs are instant."
-
-  # Step 1: install renv itself with --vanilla (no project hooks needed yet).
   Rscript --vanilla -e '
-    if (!requireNamespace("renv", quietly = TRUE)) {
-      install.packages("renv", repos = "https://cloud.r-project.org")
-    }
-    message("renv is available.")
-  '
+    # r-universe provides pre-built duckdb binaries for macOS and Windows,
+    # avoiding the slow C++ source compilation that is the default on CRAN.
+    options(repos = c(
+      duckdb = "https://duckdb.r-universe.dev",
+      CRAN   = "https://cloud.r-project.org"
+    ))
 
-  # Step 2: restore WITHOUT --vanilla so renv's .Rprofile hook activates.
-  # --vanilla suppresses .Rprofile and makes restore() silently install nothing.
-  Rscript -e 'renv::restore(prompt = FALSE)'
+    pkgs    <- c("shiny", "DBI", "duckdb")
+    missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+
+    if (length(missing) == 0L) {
+      message("All required packages are already installed.")
+    } else {
+      message("Installing: ", paste(missing, collapse = ", "))
+      # On macOS and Windows request binary packages (faster, no compilation).
+      # On Linux fall back to the platform default.
+      pkg_type <- if (Sys.info()[["sysname"]] %in% c("Darwin", "Windows")) {
+        "binary"
+      } else {
+        getOption("pkgType")
+      }
+      install.packages(missing, type = pkg_type)
+    }
+  '
 
   success "R packages ready."
 }
@@ -248,7 +232,6 @@ build_database_if_needed() {
 # ---------------------------------------------------------------------------
 
 check_port() {
-  # Try ss first, fall back to lsof, then just skip the check.
   local busy=0
 
   if command -v ss >/dev/null 2>&1; then
