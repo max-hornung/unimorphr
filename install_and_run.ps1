@@ -1,7 +1,17 @@
 $ErrorActionPreference = "Stop"
 
-$RepoUrl = "https://github.com/YOUR-USERNAME/unimorph-lemma-lookup.git"
-$AppDir = Join-Path $env:USERPROFILE "unimorph-lemma-lookup"
+# ---------------------------------------------------------------------------
+# Self-fix execution policy so colleagues don't hit "scripts are disabled".
+# We only change the CurrentUser scope — no admin rights required.
+# ---------------------------------------------------------------------------
+$ep = Get-ExecutionPolicy -Scope CurrentUser
+if ($ep -eq "Restricted" -or $ep -eq "Undefined") {
+    Write-Host "Setting PowerShell execution policy to RemoteSigned for current user."
+    Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+}
+
+$RepoUrl = "https://github.com/max-hornung/unimorphr.git"
+$AppDir = Join-Path $env:USERPROFILE "unimorphr"
 $ShinyPort = 3838
 
 Write-Host ""
@@ -224,21 +234,53 @@ function Install-R-Packages {
         [string]$Rscript
     )
 
-    Write-Host "Installing required R packages if needed..."
+    Write-Host ""
+    Write-Host ">>> Installing R packages."
 
-    & $Rscript -e @"
-options(repos = c(CRAN = "https://cloud.r-project.org"))
+    # ---- renv path (fast, reproducible) ------------------------------------
+    $renvLock = Join-Path $AppDir "renv.lock"
+    if (Test-Path $renvLock) {
+        Write-Host "    Found renv.lock - using renv for reproducible install."
+        Write-Host "    This may take a few minutes on first run."
 
-pkgs <- c("shiny", "DBI", "duckdb")
+        # Step 1: install renv with --vanilla (no project hooks needed yet).
+        & $Rscript --vanilla -e @"
+if (!requireNamespace('renv', quietly = TRUE)) {
+  install.packages('renv', repos = 'https://cloud.r-project.org')
+}
+message('renv is available.')
+"@
+        # Step 2: restore WITHOUT --vanilla so renv's .Rprofile hook activates.
+        # --vanilla suppresses .Rprofile and makes restore() silently do nothing.
+        & $Rscript -e "renv::restore(prompt = FALSE)"
+        Write-Host "    OK: R packages ready."
+        return
+    }
+
+    # ---- direct install path -----------------------------------------------
+    Write-Host "    No renv.lock found - installing packages directly."
+    Write-Host "    duckdb pre-built binary will be fetched from r-universe."
+    Write-Host "    This may take a few minutes on first run."
+
+    & $Rscript --vanilla -e @"
+# r-universe hosts pre-built Windows binaries for duckdb, avoiding the
+# slow C++ source compilation that CRAN triggers by default on Windows.
+options(repos = c(
+  duckdb = 'https://duckdb.r-universe.dev',
+  CRAN   = 'https://cloud.r-project.org'
+))
+
+pkgs    <- c('shiny', 'DBI', 'duckdb')
 missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 
-if (length(missing) > 0) {
-  message("Installing: ", paste(missing, collapse = ", "))
-  install.packages(missing)
+if (length(missing) == 0L) {
+  message('All required packages are already installed.')
 } else {
-  message("All required R packages are already installed.")
+  message('Installing: ', paste(missing, collapse = ', '))
+  install.packages(missing, type = 'binary')
 }
 "@
+    Write-Host "    OK: R packages ready."
 }
 
 function Build-Database-If-Needed {
@@ -263,11 +305,30 @@ function Build-Database-If-Needed {
 
     if (-not (Test-Path $dbFile)) {
         Write-Host ""
-        Write-Host "Building local UniMorph database."
-        Write-Host "This may take a while on first run."
-        & $Rscript -e 'source("R/setup_local_database.R")'
+        Write-Host ">>> Building local UniMorph database."
+        Write-Host "    Downloads TSV files then imports into DuckDB."
+        Write-Host "    This takes 1-5 minutes depending on language count and internet speed."
+        Write-Host "    Progress is printed below."
+        Write-Host ""
+        & $Rscript --vanilla -e 'source("R/setup_local_database.R")'
+        Write-Host "    OK: Database built."
     } else {
-        Write-Host "Local database already exists."
+        Write-Host "    OK: Database already exists - skipping build."
+    }
+}
+
+function Test-Port {
+    param([int]$Port)
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        $listener.Stop()
+        return $false   # port is free
+    } catch {
+        return $true    # port is in use
+    } finally {
+        if ($listener) { try { $listener.Stop() } catch {} }
     }
 }
 
@@ -276,14 +337,22 @@ function Launch-App {
         [string]$Rscript
     )
 
+    if (Test-Port -Port $ShinyPort) {
+        Write-Host ""
+        Write-Host "    WARN: Port $ShinyPort appears to be in use."
+        Write-Host "    Set a different port by editing `$ShinyPort at the top of this script."
+    }
+
     Write-Host ""
-    Write-Host "Starting Shiny app."
-    Write-Host "Keep this PowerShell window open while the app is running."
+    Write-Host ">>> Starting Shiny app on port $ShinyPort."
+    Write-Host "    Keep this PowerShell window open while the app is running."
+    Write-Host "    Open your browser at:  http://127.0.0.1:$ShinyPort"
+    Write-Host "    Press Ctrl-C to stop."
     Write-Host ""
 
     $env:SHINY_PORT = "$ShinyPort"
 
-    & $Rscript -e @"
+    & $Rscript --vanilla -e @"
 port <- as.integer(Sys.getenv("SHINY_PORT", "3838"))
 
 shiny::runApp(

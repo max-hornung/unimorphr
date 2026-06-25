@@ -1,4 +1,4 @@
-
+#!/usr/bin/env bash
 set -euo pipefail
 
 REPO_URL="https://github.com/max-hornung/unimorphr.git"
@@ -194,13 +194,17 @@ install_r_packages() {
     echo "    Found renv.lock — using renv for reproducible install."
     echo "    This may take a few minutes on first run."
 
-    RENV_CONFIG_AUTOLOADER_ENABLED=false \
+    # Step 1: install renv itself with --vanilla (safe; no project hooks needed yet).
     Rscript --vanilla -e '
       if (!requireNamespace("renv", quietly = TRUE)) {
         install.packages("renv", repos = "https://cloud.r-project.org")
       }
-      renv::restore(prompt = FALSE)
+      message("renv is available.")
     '
+    # Step 2: renv::restore() must NOT use --vanilla.
+    # renv activates via a project .Rprofile hook; --vanilla disables
+    # .Rprofile and causes restore() to silently install nothing.
+    Rscript -e 'renv::restore(prompt = FALSE)'
   else
     echo "    No renv.lock found — installing packages directly."
     echo "    duckdb will be fetched as a pre-built binary where possible."
@@ -221,8 +225,11 @@ install_r_packages() {
         message("All required packages are already installed.")
       } else {
         message("Installing: ", paste(missing, collapse = ", "))
-        # type = "binary" is a no-op on Linux but speeds things up on macOS.
-        install.packages(missing, type = "binary")
+        # On macOS request binary packages (much faster, avoids compilation).
+        # On Linux "binary" is not a valid type and errors; use the platform
+        # default (source) instead so install.packages() always succeeds.
+        pkg_type <- if (Sys.info()[["sysname"]] == "Darwin") "binary" else getOption("pkgType")
+        install.packages(missing, type = pkg_type)
       }
     '
   fi
