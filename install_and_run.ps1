@@ -441,6 +441,26 @@ function Add-Languages-Interactively {
 # ---------------------------------------------------------------------------
 # R packages
 # ---------------------------------------------------------------------------
+# R packages
+# ---------------------------------------------------------------------------
+function Get-AppLibPath {
+    # Use one fixed, explicit library folder for everything this script does
+    # with R, instead of relying on R's default user-library resolution.
+    #
+    # Why: --vanilla implies --no-environ, which skips .Renviron. If a
+    # machine's R_LIBS_USER is set via .Renviron (common after using
+    # RStudio, or on a Windows profile with a OneDrive-redirected
+    # Documents folder), install.packages() and library() can end up
+    # consulting DIFFERENT default paths across separate --vanilla
+    # invocations -- so a step that just reported success ("packages
+    # ready") is followed by a library(DBI) failure in the very next R
+    # process. Pinning one folder and passing it explicitly every time
+    # removes that whole class of problem.
+    $libPath = Join-Path $AppDir ".rlib"
+    New-Item -ItemType Directory -Force -Path $libPath | Out-Null
+    return $libPath
+}
+
 function Install-R-Packages {
     param([string]$Rscript)
 
@@ -449,32 +469,41 @@ function Install-R-Packages {
     Write-Host "    duckdb pre-built binary will be fetched from r-universe."
     Write-Host "    This may take a few minutes on first run."
 
+    $libPath = Get-AppLibPath
+    Write-Host "    Using package library: $libPath"
+
     # Write R code to a temp file — avoids here-string quoting issues in PowerShell
     $rScript = Join-Path $env:TEMP "unimorphr_install_pkgs.R"
     $rScriptContent = @'
+lib_path <- commandArgs(trailingOnly = TRUE)[1]
+.libPaths(c(lib_path, .libPaths()))
+
 options(repos = c(
   duckdb = "https://duckdb.r-universe.dev",
   CRAN   = "https://cloud.r-project.org"
 ))
 
 pkgs    <- c("shiny", "DBI", "duckdb")
-missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE, lib.loc = lib_path)]
 
 if (length(missing) == 0L) {
   message("All required packages are already installed.")
 } else {
   message("Installing: ", paste(missing, collapse = ", "))
-  install.packages(missing, type = "binary")
+  install.packages(missing, lib = lib_path, type = "binary")
 }
 
-still_missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+still_missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE, lib.loc = lib_path)]
 if (length(still_missing) > 0L) {
   stop("Failed to install required package(s): ", paste(still_missing, collapse = ", "))
 }
+
+message("Library path in use: ", lib_path)
+message("Packages now visible there: ", paste(list.files(lib_path), collapse = ", "))
 '@
     Write-Utf8NoBom -Path $rScript -Content $rScriptContent
 
-    & $Rscript --vanilla $rScript
+    & $Rscript --vanilla $rScript $libPath
     $code = $LASTEXITCODE
     Remove-Item $rScript -Force -ErrorAction SilentlyContinue
 
