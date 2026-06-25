@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"   # makes Invoke-WebRequest much faster
 
 # ---------------------------------------------------------------------------
-# Self-fix execution policy so colleagues don't hit "scripts are disabled".
-# We only change the CurrentUser scope — no admin rights required.
+# Self-fix execution policy — no admin rights required
 # ---------------------------------------------------------------------------
 $ep = Get-ExecutionPolicy -Scope CurrentUser
 if ($ep -eq "Restricted" -or $ep -eq "Undefined") {
@@ -19,84 +19,177 @@ Write-Host "UniMorphR Windows installer and launcher"
 Write-Host "========================================"
 Write-Host ""
 
+# ---------------------------------------------------------------------------
+# PATH refresh — picks up programs installed earlier in this same session
+# ---------------------------------------------------------------------------
+function Refresh-Path {
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:PATH    = "$machinePath;$userPath"
+}
+
+# ---------------------------------------------------------------------------
+# winget — install if missing (requires Windows 10 1809+)
+# ---------------------------------------------------------------------------
+function Ensure-Winget {
+    if (Get-Command winget -ErrorAction SilentlyContinue) { return }
+
+    Write-Host "winget not found. Installing from GitHub..."
+
+    $tmp = Join-Path $env:TEMP "winget-install"
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+    # Fetch latest release metadata from GitHub
+    $release  = Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-cli/releases/latest"
+    $bundle   = $release.assets | Where-Object { $_.name -eq "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" } | Select-Object -First 1
+    $depsZip  = $release.assets | Where-Object { $_.name -eq "DesktopAppInstaller_Dependencies.zip" }                    | Select-Object -First 1
+    $license  = $release.assets | Where-Object { $_.name -like "*_License1.xml" }                                        | Select-Object -First 1
+
+    if (-not $bundle -or -not $depsZip -or -not $license) {
+        Write-Host "ERROR: Could not find winget release assets on GitHub."
+        Write-Host "Please install winget manually from the Microsoft Store (search: App Installer)"
+        Write-Host "then rerun this script."
+        exit 1
+    }
+
+    $bundlePath  = Join-Path $tmp $bundle.name
+    $depsZipPath = Join-Path $tmp $depsZip.name
+    $licensePath = Join-Path $tmp $license.name
+    $depsDir     = Join-Path $tmp "deps"
+
+    Write-Host "    Downloading winget installer..."
+    Invoke-WebRequest $bundle.browser_download_url  -OutFile $bundlePath
+    Invoke-WebRequest $depsZip.browser_download_url -OutFile $depsZipPath
+    Invoke-WebRequest $license.browser_download_url -OutFile $licensePath
+
+    Expand-Archive $depsZipPath -DestinationPath $depsDir -Force
+
+    $depPackages = Get-ChildItem $depsDir -Recurse -Filter "*.appx" |
+        Where-Object { $_.FullName -match "x64" -or $_.FullName -match "x86" }
+
+    Write-Host "    Installing winget dependencies..."
+    foreach ($dep in $depPackages) {
+        Add-AppxPackage -Path $dep.FullName -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "    Installing winget..."
+    Add-AppxProvisionedPackage -Online -PackagePath $bundlePath `
+        -LicensePath $licensePath -ErrorAction Stop | Out-Null
+
+    Refresh-Path
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget was installed but is not yet available in this session."
+        Write-Host "Please close PowerShell, open it again, and rerun the command."
+        exit 1
+    }
+
+    Write-Host "    OK: winget installed."
+}
+
+# ---------------------------------------------------------------------------
+# Git
+# ---------------------------------------------------------------------------
 function Find-Git {
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($git) { return $git.Source }
 
-    $possible = @(
+    foreach ($p in @(
         "C:\Program Files\Git\cmd\git.exe",
         "C:\Program Files (x86)\Git\cmd\git.exe"
-    )
-    foreach ($p in $possible) {
+    )) {
         if (Test-Path $p) { return $p }
     }
     return $null
 }
 
-function Find-Rscript {
-    $rscript = Get-Command Rscript -ErrorAction SilentlyContinue
-    if ($rscript) { return $rscript.Source }
-
-    $possible = Get-ChildItem "C:\Program Files\R" -Recurse -Filter "Rscript.exe" `
-        -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-
-    if ($possible) { return $possible.FullName }
-    return $null
-}
-
-function Ensure-Winget {
-    $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if (-not $winget) {
-        Write-Host "winget was not found."
-        Write-Host "Please install Git and R manually, then run this command again."
-        exit 1
-    }
-}
-
 function Ensure-Git {
     $git = Find-Git
-    if ($git) {
-        Write-Host "Git found: $git"
-        return $git
-    }
+    if ($git) { Write-Host "Git found: $git"; return $git }
 
-    Write-Host "Git not found. Installing Git with winget..."
+    Write-Host "Git not found. Installing via winget..."
     Ensure-Winget
     winget install --id Git.Git -e --source winget `
         --accept-package-agreements --accept-source-agreements
 
+    Refresh-Path
     $git = Find-Git
     if (-not $git) {
-        Write-Host "Git was installed but could not be found in this session."
+        Write-Host "Git installed but not found in this session."
         Write-Host "Please close PowerShell, open it again, and rerun the command."
         exit 1
     }
     return $git
 }
 
+# ---------------------------------------------------------------------------
+# R
+# ---------------------------------------------------------------------------
+function Find-Rscript {
+    $r = Get-Command Rscript -ErrorAction SilentlyContinue
+    if ($r) { return $r.Source }
+
+    $found = Get-ChildItem "C:\Program Files\R" -Recurse -Filter "Rscript.exe" `
+        -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($found) { return $found.FullName }
+    return $null
+}
+
 function Ensure-R {
     $rscript = Find-Rscript
-    if ($rscript) {
-        Write-Host "R found: $rscript"
-        return $rscript
-    }
+    if ($rscript) { Write-Host "R found: $rscript"; return $rscript }
 
-    Write-Host "R not found. Installing R with winget..."
+    Write-Host "R not found. Installing via winget..."
     Ensure-Winget
     winget install --id RProject.R -e --source winget `
         --accept-package-agreements --accept-source-agreements
 
+    Refresh-Path
     $rscript = Find-Rscript
     if (-not $rscript) {
-        Write-Host "R was installed but Rscript could not be found in this session."
+        Write-Host "R installed but not found in this session."
         Write-Host "Please close PowerShell, open it again, and rerun the command."
         exit 1
     }
     return $rscript
 }
 
+# ---------------------------------------------------------------------------
+# Rtools — needed to compile R packages from source on Windows
+# ---------------------------------------------------------------------------
+function Ensure-Rtools {
+    # Check common Rtools locations
+    $rtoolsPaths = @(
+        "C:\rtools44\usr\bin\bash.exe",
+        "C:\rtools43\usr\bin\bash.exe",
+        "C:\rtools42\usr\bin\bash.exe",
+        "C:\Rtools\bin\bash.exe"
+    )
+
+    foreach ($p in $rtoolsPaths) {
+        if (Test-Path $p) {
+            Write-Host "Rtools found at: $(Split-Path $p -Parent)"
+            return
+        }
+    }
+
+    Write-Host "Rtools not found. Installing via winget..."
+    Write-Host "(Rtools is needed if any R package must be compiled from source.)"
+    Ensure-Winget
+
+    # winget id for Rtools44 (current version for R 4.x)
+    winget install --id RProject.Rtools -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+
+    Refresh-Path
+    Write-Host "    OK: Rtools installed."
+}
+
+# ---------------------------------------------------------------------------
+# Clone / update repo
+# ---------------------------------------------------------------------------
 function Clone-Or-Update-Repo {
     param([string]$Git)
 
@@ -118,6 +211,9 @@ function Clone-Or-Update-Repo {
     Set-Location $AppDir
 }
 
+# ---------------------------------------------------------------------------
+# Language configuration
+# ---------------------------------------------------------------------------
 function Ensure-Language-File {
     $configDir = Join-Path $AppDir "config"
     $langFile  = Join-Path $configDir "languages.csv"
@@ -125,17 +221,16 @@ function Ensure-Language-File {
     if (-not (Test-Path $langFile)) {
         Write-Host "config/languages.csv not found. Creating a default one."
         New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-        "lang,label"   | Out-File  -FilePath $langFile -Encoding utf8
-        "eng,English"  | Add-Content -Path $langFile -Encoding utf8
-        "deu,German"   | Add-Content -Path $langFile -Encoding utf8
-        "fra,French"   | Add-Content -Path $langFile -Encoding utf8
+        "lang,label"  | Out-File    -FilePath $langFile -Encoding utf8
+        "eng,English" | Add-Content -Path $langFile -Encoding utf8
+        "deu,German"  | Add-Content -Path $langFile -Encoding utf8
+        "fra,French"  | Add-Content -Path $langFile -Encoding utf8
     }
     return $langFile
 }
 
 function Show-Languages {
     param([string]$LangFile)
-
     Write-Host ""
     Write-Host "Current languages in config/languages.csv:"
     Write-Host "------------------------------------------"
@@ -147,14 +242,11 @@ function Show-Languages {
 
 function Add-Languages-Interactively {
     param([string]$LangFile)
-
     $script:LanguagesChanged = $false
     $answer = Read-Host "Add more languages before building the database? [y/N]"
 
     if ($answer -notmatch "^(y|Y|yes|YES)$") {
-        Write-Host "No extra languages added."
-        Write-Host ""
-        return
+        Write-Host "No extra languages added."; Write-Host ""; return
     }
 
     Write-Host ""
@@ -172,15 +264,11 @@ function Add-Languages-Interactively {
         $label = if ($parts.Count -gt 1) { $parts[1].Trim() } else { $code }
 
         if ($code -notmatch "^[a-z0-9_-]+$") {
-            Write-Host "Invalid language code: $code — use codes like eng, deu, fra."
-            continue
+            Write-Host "Invalid code: $code — use codes like eng, deu, fra."; continue
         }
 
         $existing = Import-Csv $LangFile | Where-Object { $_.lang -eq $code }
-        if ($existing) {
-            Write-Host "Already in list: $code"
-            continue
-        }
+        if ($existing) { Write-Host "Already in list: $code"; continue }
 
         "$code,$label" | Add-Content -Path $LangFile -Encoding utf8
         Write-Host "Added: $code - $label"
@@ -190,6 +278,9 @@ function Add-Languages-Interactively {
     Show-Languages -LangFile $LangFile
 }
 
+# ---------------------------------------------------------------------------
+# R packages
+# ---------------------------------------------------------------------------
 function Install-R-Packages {
     param([string]$Rscript)
 
@@ -199,8 +290,6 @@ function Install-R-Packages {
     Write-Host "    This may take a few minutes on first run."
 
     & $Rscript --vanilla -e @"
-# r-universe hosts pre-built Windows binaries for duckdb, avoiding the
-# slow C++ source compilation that CRAN triggers by default on Windows.
 options(repos = c(
   duckdb = 'https://duckdb.r-universe.dev',
   CRAN   = 'https://cloud.r-project.org'
@@ -219,6 +308,9 @@ if (length(missing) == 0L) {
     Write-Host "    OK: R packages ready."
 }
 
+# ---------------------------------------------------------------------------
+# Database build
+# ---------------------------------------------------------------------------
 function Build-Database-If-Needed {
     param([string]$Rscript)
 
@@ -245,14 +337,16 @@ function Build-Database-If-Needed {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Port check + launch
+# ---------------------------------------------------------------------------
 function Test-Port {
     param([int]$Port)
     $listener = $null
     try {
         $listener = [System.Net.Sockets.TcpListener]::new(
             [System.Net.IPAddress]::Loopback, $Port)
-        $listener.Start()
-        $listener.Stop()
+        $listener.Start(); $listener.Stop()
         return $false
     } catch {
         return $true
@@ -296,9 +390,9 @@ shiny::runApp(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
 $Git     = Ensure-Git
 $Rscript = Ensure-R
+Ensure-Rtools
 
 Clone-Or-Update-Repo -Git $Git
 
@@ -306,6 +400,6 @@ $LangFile = Ensure-Language-File
 Show-Languages              -LangFile $LangFile
 Add-Languages-Interactively -LangFile $LangFile
 
-Install-R-Packages      -Rscript $Rscript
+Install-R-Packages       -Rscript $Rscript
 Build-Database-If-Needed -Rscript $Rscript
-Launch-App              -Rscript $Rscript
+Launch-App               -Rscript $Rscript
