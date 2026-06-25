@@ -3,11 +3,23 @@ $ProgressPreference    = "SilentlyContinue"   # makes Invoke-WebRequest much fas
 
 # ---------------------------------------------------------------------------
 # Self-fix execution policy — no admin rights required
+#
+# NOTE: this only protects FUTURE invocations of this script. It cannot help
+# the CURRENT run, because PowerShell already had to be willing to start
+# running this file before this line executes. The one-liner in the README
+# (-ExecutionPolicy Bypass -File ...) is what makes the *first* run work.
+# We keep this here purely so that if you later open the saved .ps1 file by
+# itself, you don't hit the same wall twice.
 # ---------------------------------------------------------------------------
 $ep = Get-ExecutionPolicy -Scope CurrentUser
 if ($ep -eq "Restricted" -or $ep -eq "Undefined") {
     Write-Host "Setting PowerShell execution policy to RemoteSigned for current user."
-    Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+    try {
+        Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+    } catch {
+        Write-Host "WARN: could not update execution policy ($($_.Exception.Message))."
+        Write-Host "      You can keep using the README's -ExecutionPolicy Bypass command instead."
+    }
 }
 
 $RepoUrl   = "https://github.com/max-hornung/unimorphr.git"
@@ -25,7 +37,44 @@ Write-Host ""
 function Refresh-Path {
     $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath    = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    $env:PATH    = "$machinePath;$userPath"
+    # The per-user winget app-execution-alias shim lives here and is NOT part
+    # of either Machine or User Path on many systems until the next logon.
+    $wingetShim  = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+    $env:PATH    = "$machinePath;$userPath;$wingetShim"
+}
+
+# ---------------------------------------------------------------------------
+# Retry helper for flaky network calls (GitHub API / downloads)
+# ---------------------------------------------------------------------------
+function Invoke-WithRetry {
+    param(
+        [scriptblock]$Action,
+        [int]$MaxAttempts = 3,
+        [int]$DelaySeconds = 3,
+        [string]$Description = "operation"
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            return & $Action
+        } catch {
+            if ($attempt -eq $MaxAttempts) {
+                Write-Host "ERROR: $Description failed after $MaxAttempts attempts: $($_.Exception.Message)"
+                throw
+            }
+            Write-Host "    $Description failed (attempt $attempt/$MaxAttempts): $($_.Exception.Message)"
+            Write-Host "    Retrying in $DelaySeconds seconds..."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Admin check — needed for the winget bootstrap path only
+# ---------------------------------------------------------------------------
+function Test-IsAdmin {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 # ---------------------------------------------------------------------------
@@ -34,13 +83,31 @@ function Refresh-Path {
 function Ensure-Winget {
     if (Get-Command winget -ErrorAction SilentlyContinue) { return }
 
-    Write-Host "winget not found. Installing from GitHub..."
+    Write-Host "winget not found."
+    Write-Host ""
+    Write-Host "The most reliable fix is to install 'App Installer' from the Microsoft Store"
+    Write-Host "(it's free, ~30 seconds, and needs no admin rights):"
+    Write-Host "    https://apps.microsoft.com/detail/9nblggh4nns1"
+    Write-Host ""
+    Write-Host "Attempting an automatic install from GitHub as a fallback..."
+
+    # Add-AppxProvisionedPackage (used below) requires an elevated session.
+    # Detect that up front instead of letting the script crash deep inside.
+    if (-not (Test-IsAdmin)) {
+        Write-Host "ERROR: Installing winget this way requires an elevated (Run as Administrator) PowerShell session."
+        Write-Host "Please either:"
+        Write-Host "  1) install 'App Installer' from the Microsoft Store link above, then rerun this command, or"
+        Write-Host "  2) reopen PowerShell as Administrator and rerun this command."
+        exit 1
+    }
 
     $tmp = Join-Path $env:TEMP "winget-install"
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
     # Fetch latest release metadata from GitHub
-    $release  = Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-cli/releases/latest"
+    $release  = Invoke-WithRetry -Description "fetching winget release metadata" -Action {
+        Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-cli/releases/latest"
+    }
     $bundle   = $release.assets | Where-Object { $_.name -eq "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" } | Select-Object -First 1
     $depsZip  = $release.assets | Where-Object { $_.name -eq "DesktopAppInstaller_Dependencies.zip" }                    | Select-Object -First 1
     $license  = $release.assets | Where-Object { $_.name -like "*_License1.xml" }                                        | Select-Object -First 1
@@ -58,9 +125,15 @@ function Ensure-Winget {
     $depsDir     = Join-Path $tmp "deps"
 
     Write-Host "    Downloading winget installer..."
-    Invoke-WebRequest $bundle.browser_download_url  -OutFile $bundlePath
-    Invoke-WebRequest $depsZip.browser_download_url -OutFile $depsZipPath
-    Invoke-WebRequest $license.browser_download_url -OutFile $licensePath
+    Invoke-WithRetry -Description "downloading winget bundle" -Action {
+        Invoke-WebRequest $bundle.browser_download_url -OutFile $bundlePath
+    }
+    Invoke-WithRetry -Description "downloading winget dependencies" -Action {
+        Invoke-WebRequest $depsZip.browser_download_url -OutFile $depsZipPath
+    }
+    Invoke-WithRetry -Description "downloading winget license" -Action {
+        Invoke-WebRequest $license.browser_download_url -OutFile $licensePath
+    }
 
     Expand-Archive $depsZipPath -DestinationPath $depsDir -Force
 
@@ -73,8 +146,15 @@ function Ensure-Winget {
     }
 
     Write-Host "    Installing winget..."
-    Add-AppxProvisionedPackage -Online -PackagePath $bundlePath `
-        -LicensePath $licensePath -ErrorAction Stop | Out-Null
+    try {
+        Add-AppxProvisionedPackage -Online -PackagePath $bundlePath `
+            -LicensePath $licensePath -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "ERROR: winget installation failed: $($_.Exception.Message)"
+        Write-Host "Please install 'App Installer' from the Microsoft Store instead:"
+        Write-Host "    https://apps.microsoft.com/detail/9nblggh4nns1"
+        exit 1
+    }
 
     Refresh-Path
 
@@ -85,6 +165,31 @@ function Ensure-Winget {
     }
 
     Write-Host "    OK: winget installed."
+}
+
+# ---------------------------------------------------------------------------
+# Helper: run a winget install and verify it actually succeeded
+# ---------------------------------------------------------------------------
+function Install-WithWinget {
+    param(
+        [string]$PackageId,
+        [string]$DisplayName
+    )
+
+    Write-Host "Installing $DisplayName via winget (id: $PackageId)..."
+    & winget install --id $PackageId -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+    $code = $LASTEXITCODE
+
+    # winget returns 0 on success, and -1978335189 / 0x8A150109 when the
+    # package is already installed at the latest version — treat that as OK.
+    if ($code -ne 0 -and $code -ne -1978335189) {
+        Write-Host "ERROR: winget exited with code $code while installing $DisplayName."
+        Write-Host "Common causes: needs a Microsoft Store sign-in once, blocked by a corporate policy,"
+        Write-Host "or a flaky network connection. Try running 'winget install --id $PackageId -e' by hand"
+        Write-Host "to see the full interactive error, then rerun this script."
+        exit 1
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -109,8 +214,7 @@ function Ensure-Git {
 
     Write-Host "Git not found. Installing via winget..."
     Ensure-Winget
-    winget install --id Git.Git -e --source winget `
-        --accept-package-agreements --accept-source-agreements
+    Install-WithWinget -PackageId "Git.Git" -DisplayName "Git"
 
     Refresh-Path
     $git = Find-Git
@@ -143,8 +247,7 @@ function Ensure-R {
 
     Write-Host "R not found. Installing via winget..."
     Ensure-Winget
-    winget install --id RProject.R -e --source winget `
-        --accept-package-agreements --accept-source-agreements
+    Install-WithWinget -PackageId "RProject.R" -DisplayName "R"
 
     Refresh-Path
     $rscript = Find-Rscript
@@ -159,32 +262,54 @@ function Ensure-R {
 # ---------------------------------------------------------------------------
 # Rtools — needed to compile R packages from source on Windows
 # ---------------------------------------------------------------------------
-function Ensure-Rtools {
-    # Check common Rtools locations
+function Find-RtoolsBash {
     $rtoolsPaths = @(
         "C:\rtools44\usr\bin\bash.exe",
         "C:\rtools43\usr\bin\bash.exe",
         "C:\rtools42\usr\bin\bash.exe",
         "C:\Rtools\bin\bash.exe"
     )
-
     foreach ($p in $rtoolsPaths) {
-        if (Test-Path $p) {
-            Write-Host "Rtools found at: $(Split-Path $p -Parent)"
-            return
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+function Ensure-Rtools {
+    $found = Find-RtoolsBash
+    if ($found) {
+        Write-Host "Rtools found at: $(Split-Path $found -Parent)"
+    } else {
+        Write-Host "Rtools not found. Installing via winget..."
+        Write-Host "(Rtools is needed if any R package must be compiled from source.)"
+        Ensure-Winget
+        Install-WithWinget -PackageId "RProject.Rtools" -DisplayName "Rtools"
+        Refresh-Path
+        $found = Find-RtoolsBash
+        if ($found) {
+            Write-Host "    OK: Rtools installed."
+        } else {
+            Write-Host "    WARN: Rtools install finished but bash.exe was not found in the usual location."
+            Write-Host "    This is only a problem if an R package needs to compile from source."
         }
     }
 
-    Write-Host "Rtools not found. Installing via winget..."
-    Write-Host "(Rtools is needed if any R package must be compiled from source.)"
-    Ensure-Winget
+    if ($found) {
+        # Make sure R can actually find Rtools' toolchain (mingw/usr/bin) on PATH
+        # for this session, since most packages we need ship Windows binaries
+        # anyway and this is best-effort.
+        $rtoolsRoot = Split-Path (Split-Path $found -Parent) -Parent
+        $binPaths = @(
+            (Join-Path $rtoolsRoot "usr\bin"),
+            (Join-Path $rtoolsRoot "x86_64-w64-mingw32.static.posix\bin")
+        ) | Where-Object { Test-Path $_ }
 
-    # winget id for Rtools44 (current version for R 4.x)
-    winget install --id RProject.Rtools -e --source winget `
-        --accept-package-agreements --accept-source-agreements
-
-    Refresh-Path
-    Write-Host "    OK: Rtools installed."
+        foreach ($bp in $binPaths) {
+            if ($env:PATH -notlike "*$bp*") {
+                $env:PATH = "$bp;$env:PATH"
+            }
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -197,6 +322,11 @@ function Clone-Or-Update-Repo {
         Write-Host ""
         Write-Host "Updating existing app folder: $AppDir"
         & $Git -C $AppDir pull --ff-only
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: 'git pull' failed (exit code $LASTEXITCODE)."
+            Write-Host "If you have local changes in $AppDir, either commit/stash them or delete the folder and rerun."
+            exit 1
+        }
     } elseif (Test-Path $AppDir) {
         Write-Host ""
         Write-Host "The folder $AppDir already exists but is not a Git repository."
@@ -206,6 +336,10 @@ function Clone-Or-Update-Repo {
         Write-Host ""
         Write-Host "Cloning app into: $AppDir"
         & $Git clone $RepoUrl $AppDir
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: 'git clone' failed (exit code $LASTEXITCODE). Check your internet connection and retry."
+            exit 1
+        }
     }
 
     Set-Location $AppDir
@@ -243,7 +377,16 @@ function Show-Languages {
 function Add-Languages-Interactively {
     param([string]$LangFile)
     $script:LanguagesChanged = $false
-    $answer = Read-Host "Add more languages before building the database? [y/N]"
+
+    # Reading from a non-interactive host (e.g. piped invocation) would throw;
+    # treat that the same as "no" instead of crashing the whole script.
+    $answer = $null
+    try {
+        $answer = Read-Host "Add more languages before building the database? [y/N]"
+    } catch {
+        Write-Host "No interactive input available — skipping language prompt."
+        return
+    }
 
     if ($answer -notmatch "^(y|Y|yes|YES)$") {
         Write-Host "No extra languages added."; Write-Host ""; return
@@ -306,10 +449,23 @@ if (length(missing) == 0L) {
   message("Installing: ", paste(missing, collapse = ", "))
   install.packages(missing, type = "binary")
 }
+
+still_missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+if (length(still_missing) > 0L) {
+  stop("Failed to install required package(s): ", paste(still_missing, collapse = ", "))
+}
 '@ | Set-Content -Path $rScript -Encoding UTF8
 
     & $Rscript --vanilla $rScript
+    $code = $LASTEXITCODE
     Remove-Item $rScript -Force -ErrorAction SilentlyContinue
+
+    if ($code -ne 0) {
+        Write-Host "ERROR: R package installation failed (exit code $code)."
+        Write-Host "If a package needs to compile from source, make sure Rtools is installed and on PATH,"
+        Write-Host "then rerun this script."
+        exit 1
+    }
     Write-Host "    OK: R packages ready."
 }
 
@@ -339,7 +495,15 @@ function Build-Database-If-Needed {
         $rSetup = Join-Path $env:TEMP "unimorphr_setup_db.R"
         'source("R/setup_local_database.R")' | Set-Content -Path $rSetup -Encoding UTF8
         & $Rscript --vanilla $rSetup
+        $code = $LASTEXITCODE
         Remove-Item $rSetup -Force -ErrorAction SilentlyContinue
+
+        if ($code -ne 0 -or -not (Test-Path $dbFile)) {
+            Write-Host "ERROR: Database build failed (exit code $code) or did not produce $dbFile."
+            Write-Host "Check the R output above for the underlying error (often a network timeout"
+            Write-Host "downloading UniMorph data). Rerun this script to try again."
+            exit 1
+        }
         Write-Host "    OK: Database built."
     } else {
         Write-Host "    OK: Database already exists — skipping build."
