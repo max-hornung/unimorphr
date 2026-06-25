@@ -64,7 +64,7 @@ Rebuild the database and run the shiny app after modifying the languages.csv fil
 
 **For Windows**
 ```PowerShell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.ps1'; $p=Join-Path $env:TEMP 'install_and_run.ps1'; Invoke-WebRequest $u -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p"
+powershell -NoProfile -ExecutionPolicy Bypass -File ([System.IO.Path]::GetTempFileName() + '.ps1') 2>$null; Invoke-WebRequest 'https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.ps1' -OutFile "$env:TEMP\unimorphr_install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\unimorphr_install.ps1"
 ```
 
 
