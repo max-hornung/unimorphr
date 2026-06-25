@@ -289,22 +289,27 @@ function Install-R-Packages {
     Write-Host "    duckdb pre-built binary will be fetched from r-universe."
     Write-Host "    This may take a few minutes on first run."
 
-    & $Rscript --vanilla -e @"
+    # Write R code to a temp file — avoids here-string quoting issues in PowerShell
+    $rScript = Join-Path $env:TEMP "unimorphr_install_pkgs.R"
+    @'
 options(repos = c(
-  duckdb = 'https://duckdb.r-universe.dev',
-  CRAN   = 'https://cloud.r-project.org'
+  duckdb = "https://duckdb.r-universe.dev",
+  CRAN   = "https://cloud.r-project.org"
 ))
 
-pkgs    <- c('shiny', 'DBI', 'duckdb')
+pkgs    <- c("shiny", "DBI", "duckdb")
 missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 
 if (length(missing) == 0L) {
-  message('All required packages are already installed.')
+  message("All required packages are already installed.")
 } else {
-  message('Installing: ', paste(missing, collapse = ', '))
-  install.packages(missing, type = 'binary')
+  message("Installing: ", paste(missing, collapse = ", "))
+  install.packages(missing, type = "binary")
 }
-"@
+'@ | Set-Content -Path $rScript -Encoding UTF8
+
+    & $Rscript --vanilla $rScript
+    Remove-Item $rScript -Force -ErrorAction SilentlyContinue
     Write-Host "    OK: R packages ready."
 }
 
@@ -330,7 +335,11 @@ function Build-Database-If-Needed {
         Write-Host "    This takes 1-5 minutes depending on language count and internet speed."
         Write-Host "    Progress is printed below."
         Write-Host ""
-        & $Rscript --vanilla -e 'source("R/setup_local_database.R")'
+        # Write R code to a temp file for reliable execution on Windows
+        $rSetup = Join-Path $env:TEMP "unimorphr_setup_db.R"
+        'source("R/setup_local_database.R")' | Set-Content -Path $rSetup -Encoding UTF8
+        & $Rscript --vanilla $rSetup
+        Remove-Item $rSetup -Force -ErrorAction SilentlyContinue
         Write-Host "    OK: Database built."
     } else {
         Write-Host "    OK: Database already exists — skipping build."
