@@ -44,6 +44,26 @@ function Refresh-Path {
 }
 
 # ---------------------------------------------------------------------------
+# Write text files as UTF-8 *without* a BOM.
+#
+# Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a UTF-8 BOM
+# (byte-order mark) at the start of the file. R's parser can choke on that
+# leading BOM with a content-free error like:
+#     Fehler: unerwartete Eingabe in ""
+#     Ausführung angehalten
+# ...with no filename or line number, because parsing fails before R ever
+# reaches real code. PowerShell 7's Set-Content does not add a BOM by
+# default, which is why this can fail for one person and not another
+# depending on which `powershell`/`pwsh` actually ran this script.
+# .NET's UTF8Encoding(false) sidesteps this consistently on both versions.
+# ---------------------------------------------------------------------------
+function Write-Utf8NoBom {
+    param([string]$Path, [string]$Content)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+# ---------------------------------------------------------------------------
 # Retry helper for flaky network calls (GitHub API / downloads)
 # ---------------------------------------------------------------------------
 function Invoke-WithRetry {
@@ -355,10 +375,7 @@ function Ensure-Language-File {
     if (-not (Test-Path $langFile)) {
         Write-Host "config/languages.csv not found. Creating a default one."
         New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-        "lang,label"  | Out-File    -FilePath $langFile -Encoding utf8
-        "eng,English" | Add-Content -Path $langFile -Encoding utf8
-        "deu,German"  | Add-Content -Path $langFile -Encoding utf8
-        "fra,French"  | Add-Content -Path $langFile -Encoding utf8
+        Write-Utf8NoBom -Path $langFile -Content "lang,label`r`neng,English`r`ndeu,German`r`nfra,French`r`n"
     }
     return $langFile
 }
@@ -434,7 +451,7 @@ function Install-R-Packages {
 
     # Write R code to a temp file — avoids here-string quoting issues in PowerShell
     $rScript = Join-Path $env:TEMP "unimorphr_install_pkgs.R"
-    @'
+    $rScriptContent = @'
 options(repos = c(
   duckdb = "https://duckdb.r-universe.dev",
   CRAN   = "https://cloud.r-project.org"
@@ -454,7 +471,8 @@ still_missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE
 if (length(still_missing) > 0L) {
   stop("Failed to install required package(s): ", paste(still_missing, collapse = ", "))
 }
-'@ | Set-Content -Path $rScript -Encoding UTF8
+'@
+    Write-Utf8NoBom -Path $rScript -Content $rScriptContent
 
     & $Rscript --vanilla $rScript
     $code = $LASTEXITCODE
@@ -491,17 +509,26 @@ function Build-Database-If-Needed {
         Write-Host "    This takes 1-5 minutes depending on language count and internet speed."
         Write-Host "    Progress is printed below."
         Write-Host ""
-        # Write R code to a temp file for reliable execution on Windows
+
+        $setupRPath = Join-Path $AppDir "R\setup_local_database.R"
+        if (-not (Test-Path $setupRPath)) {
+            Write-Host "ERROR: $setupRPath does not exist in the repo you cloned."
+            Write-Host "The repo layout may have changed upstream — check 'git log' / the README for the current path."
+            exit 1
+        }
+
         $rSetup = Join-Path $env:TEMP "unimorphr_setup_db.R"
-        'source("R/setup_local_database.R")' | Set-Content -Path $rSetup -Encoding UTF8
+        Write-Utf8NoBom -Path $rSetup -Content 'source("R/setup_local_database.R")'
+
         & $Rscript --vanilla $rSetup
         $code = $LASTEXITCODE
         Remove-Item $rSetup -Force -ErrorAction SilentlyContinue
 
         if ($code -ne 0 -or -not (Test-Path $dbFile)) {
             Write-Host "ERROR: Database build failed (exit code $code) or did not produce $dbFile."
-            Write-Host "Check the R output above for the underlying error (often a network timeout"
-            Write-Host "downloading UniMorph data). Rerun this script to try again."
+            Write-Host "Check the R output above (a few lines up in this same window) for the actual"
+            Write-Host "R error message and the file/line it points to — that tells us what broke."
+            Write-Host "Rerun this script to try again once that's fixed."
             exit 1
         }
         Write-Host "    OK: Database built."
