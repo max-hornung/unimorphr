@@ -185,54 +185,31 @@ add_more_languages() {
 install_r_packages() {
   info "Installing R packages."
 
-  # Strategy:
-  # 1. If renv.lock exists → use renv::restore() (fast, reproducible).
-  # 2. Otherwise → install directly, but use r-universe for a pre-built
-  #    duckdb binary so macOS/Linux users don't have to wait for compilation.
-
-  if [ -f "renv.lock" ]; then
-    echo "    Found renv.lock — using renv for reproducible install."
-    echo "    This may take a few minutes on first run."
-
-    # Step 1: install renv itself with --vanilla (safe; no project hooks needed yet).
-    Rscript --vanilla -e '
-      if (!requireNamespace("renv", quietly = TRUE)) {
-        install.packages("renv", repos = "https://cloud.r-project.org")
-      }
-      message("renv is available.")
-    '
-    # Step 2: renv::restore() must NOT use --vanilla.
-    # renv activates via a project .Rprofile hook; --vanilla disables
-    # .Rprofile and causes restore() to silently install nothing.
-    Rscript -e 'renv::restore(prompt = FALSE)'
-  else
-    echo "    No renv.lock found — installing packages directly."
-    echo "    duckdb will be fetched as a pre-built binary where possible."
-    echo "    This may take several minutes on first run."
-
-    Rscript --vanilla -e '
-      # r-universe provides pre-built duckdb binaries for macOS and Linux,
-      # avoiding the slow source compilation that is the default on CRAN.
-      options(repos = c(
-        duckdb   = "https://duckdb.r-universe.dev",
-        CRAN     = "https://cloud.r-project.org"
-      ))
-
-      pkgs    <- c("shiny", "DBI", "duckdb")
-      missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
-
-      if (length(missing) == 0L) {
-        message("All required packages are already installed.")
-      } else {
-        message("Installing: ", paste(missing, collapse = ", "))
-        # On macOS request binary packages (much faster, avoids compilation).
-        # On Linux "binary" is not a valid type and errors; use the platform
-        # default (source) instead so install.packages() always succeeds.
-        pkg_type <- if (Sys.info()[["sysname"]] == "Darwin") "binary" else getOption("pkgType")
-        install.packages(missing, type = pkg_type)
-      }
-    '
+  # renv.lock pins exact package versions so all colleagues get the same
+  # tested environment.  Generate it once with create_lockfile.R and commit it.
+  if [ ! -f "renv.lock" ]; then
+    die "renv.lock not found in $APP_DIR.
+    Please run create_lockfile.R in your project first, then commit renv.lock:
+      Rscript --vanilla create_lockfile.R
+      git add renv.lock
+      git commit -m 'Add renv lockfile'
+      git push"
   fi
+
+  echo "    Found renv.lock — restoring pinned package versions."
+  echo "    On first run this may take a few minutes; subsequent runs are instant."
+
+  # Step 1: install renv itself with --vanilla (no project hooks needed yet).
+  Rscript --vanilla -e '
+    if (!requireNamespace("renv", quietly = TRUE)) {
+      install.packages("renv", repos = "https://cloud.r-project.org")
+    }
+    message("renv is available.")
+  '
+
+  # Step 2: restore WITHOUT --vanilla so renv's .Rprofile hook activates.
+  # --vanilla suppresses .Rprofile and makes restore() silently install nothing.
+  Rscript -e 'renv::restore(prompt = FALSE)'
 
   success "R packages ready."
 }

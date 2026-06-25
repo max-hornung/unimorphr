@@ -1,0 +1,14 @@
+Package: unimorphr
+Title: UniMorph Lemma Lookup
+Version: 0.1.0
+Description: A local Shiny interface for looking up inflected word forms from
+    the UniMorph database.
+Authors@R: person("Max", "Hornung", role = c("aut", "cre"))
+License: MIT
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.0.0
+Imports:
+    shiny,
+    DBI,
+    duckdb

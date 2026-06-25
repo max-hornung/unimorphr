@@ -237,49 +237,33 @@ function Install-R-Packages {
     Write-Host ""
     Write-Host ">>> Installing R packages."
 
-    # ---- renv path (fast, reproducible) ------------------------------------
+    # renv.lock pins exact package versions so all colleagues get the same
+    # tested environment.  Generate it once with create_lockfile.R and commit it.
     $renvLock = Join-Path $AppDir "renv.lock"
-    if (Test-Path $renvLock) {
-        Write-Host "    Found renv.lock - using renv for reproducible install."
-        Write-Host "    This may take a few minutes on first run."
+    if (-not (Test-Path $renvLock)) {
+        Write-Host ""
+        Write-Host "ERROR: renv.lock not found in $AppDir"
+        Write-Host "Please run create_lockfile.R in your project first, then commit it:"
+        Write-Host "  Rscript --vanilla create_lockfile.R"
+        Write-Host "  git add renv.lock"
+        Write-Host "  git commit -m 'Add renv lockfile'"
+        Write-Host "  git push"
+        exit 1
+    }
 
-        # Step 1: install renv with --vanilla (no project hooks needed yet).
-        & $Rscript --vanilla -e @"
+    Write-Host "    Found renv.lock - restoring pinned package versions."
+    Write-Host "    On first run this may take a few minutes; subsequent runs are instant."
+
+    # Step 1: install renv with --vanilla (no project hooks needed yet).
+    & $Rscript --vanilla -e @"
 if (!requireNamespace('renv', quietly = TRUE)) {
   install.packages('renv', repos = 'https://cloud.r-project.org')
 }
 message('renv is available.')
 "@
-        # Step 2: restore WITHOUT --vanilla so renv's .Rprofile hook activates.
-        # --vanilla suppresses .Rprofile and makes restore() silently do nothing.
-        & $Rscript -e "renv::restore(prompt = FALSE)"
-        Write-Host "    OK: R packages ready."
-        return
-    }
-
-    # ---- direct install path -----------------------------------------------
-    Write-Host "    No renv.lock found - installing packages directly."
-    Write-Host "    duckdb pre-built binary will be fetched from r-universe."
-    Write-Host "    This may take a few minutes on first run."
-
-    & $Rscript --vanilla -e @"
-# r-universe hosts pre-built Windows binaries for duckdb, avoiding the
-# slow C++ source compilation that CRAN triggers by default on Windows.
-options(repos = c(
-  duckdb = 'https://duckdb.r-universe.dev',
-  CRAN   = 'https://cloud.r-project.org'
-))
-
-pkgs    <- c('shiny', 'DBI', 'duckdb')
-missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
-
-if (length(missing) == 0L) {
-  message('All required packages are already installed.')
-} else {
-  message('Installing: ', paste(missing, collapse = ', '))
-  install.packages(missing, type = 'binary')
-}
-"@
+    # Step 2: restore WITHOUT --vanilla so renv's .Rprofile hook activates.
+    # --vanilla suppresses .Rprofile and makes restore() silently do nothing.
+    & $Rscript -e "renv::restore(prompt = FALSE)"
     Write-Host "    OK: R packages ready."
 }
 
