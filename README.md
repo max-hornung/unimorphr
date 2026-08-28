@@ -2,7 +2,7 @@
 
 This repository provides a simple local R/Shiny interface for looking up inflected word forms from [UniMorph](https://unimorph.github.io/).
 
-Here you can find the legend to the different inflections: (https://unimorph.github.io/schema/)
+Here you can find the legend to the different [inflections](https://unimorph.github.io/schema/)
 
 The tool lets you enter a **language** and a **lemma**, then returns the known UniMorph word forms and morphological feature bundles for that lemma.
 
@@ -35,7 +35,7 @@ deu  | gehen | gehst | V;IND;PRS;2;SG
 deu  | gehen | geht  | V;IND;PRS;3;SG
 ```
 
-Important: the tool retrieves forms that are available in UniMorph. It does not generate missing forms. If a lemma is not present in UniMorph for a given language, the result will be empty. Again, you can find the legend for the different inflectional features here: (https://unimorph.github.io/schema/) 
+Important: the tool retrieves forms that are available in UniMorph. It does not generate missing forms. If a lemma is not present in UniMorph for a given language, the result will be empty. Again, you can find the legend for the different inflectional features [here](https://unimorph.github.io/schema/) 
 
 ---
 
