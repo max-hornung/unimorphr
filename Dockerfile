@@ -4,20 +4,26 @@ USER root
 
 WORKDIR /app
 
-# DBI is lightweight. Use a prebuilt Linux binary for DuckDB so the
-# OpenShift build does not spend ages compiling DuckDB from source.
-RUN R -q -e 'install.packages("DBI", repos="https://cloud.r-project.org"); \
-    options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), R.version["platform"])); \
-    install.packages("duckdb", repos="https://p3m.dev/cran/__linux__/manylinux_2_28/latest/")'
+# Install DBI normally
+RUN R -q -e 'install.packages("DBI", repos="https://cloud.r-project.org")'
+
+# Install pre-built DuckDB binary for Linux.
+# The full HTTPUserAgent is required by Posit Package Manager
+# to select the correct Linux/R binary.
+RUN R -q -e 'options(HTTPUserAgent = sprintf("R/%s R (%s)", \
+    getRversion(), \
+    paste(getRversion(), R.version["platform"], R.version["arch"], R.version["os"]))); \
+    install.packages("duckdb", \
+    repos="https://p3m.dev/cran/__linux__/manylinux_2_28/latest/"); \
+    stopifnot(requireNamespace("duckdb", quietly=TRUE))'
 
 COPY . /app
 
-# Build the UniMorph database once, when OpenShift builds the image.
+# Build UniMorph database into the image
 RUN Rscript --vanilla R/setup_local_database.R && \
     chgrp -R 0 /app && \
     chmod -R g=u /app
 
-# OpenShift-compatible writable home directory
 ENV HOME=/tmp
 
 EXPOSE 8080
