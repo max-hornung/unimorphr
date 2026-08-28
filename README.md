@@ -2,6 +2,8 @@
 
 This repository provides a simple local R/Shiny interface for looking up inflected word forms from [UniMorph](https://unimorph.github.io/).
 
+Here you can find the legend to the different inflections: (https://unimorph.github.io/schema/)
+
 The tool lets you enter a **language** and a **lemma**, then returns the known UniMorph word forms and morphological feature bundles for that lemma.
 
 For example:
@@ -33,7 +35,7 @@ deu  | gehen | gehst | V;IND;PRS;2;SG
 deu  | gehen | geht  | V;IND;PRS;3;SG
 ```
 
-Important: the tool retrieves forms that are available in UniMorph. It does not generate missing forms. If a lemma is not present in UniMorph for a given language, the result will be empty.
+Important: the tool retrieves forms that are available in UniMorph. It does not generate missing forms. If a lemma is not present in UniMorph for a given language, the result will be empty. Again, you can find the legend for the different inflectional features here: (https://unimorph.github.io/schema/) 
 
 ---
 
@@ -47,20 +49,13 @@ However, only the repository owner can directly change the original repository. 
 
 ## Installation and start
 
-You do **not** need RStudio to use the app.
+You do **not** need RStudio to use the app. Currently, the local download only runs on macOS (I am trying to fix that). I alos host this version on an external server.  
 
 To install and start the app, paste this command into your terminal:
 
 **For macOS**
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.sh)"
-```
-
-**For Windows**
-
-Put this in the command prompt as power shell command (Press Win + R, type powershell, press Enter)
-```PowerShell
-irm https://raw.githubusercontent.com/max-hornung/unimorphr/main/install_and_run.ps1 | iex
 ```
 
 The script will:
