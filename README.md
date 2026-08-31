@@ -14,8 +14,6 @@ For example:
 | English  | `go`    |
 | French   | `aller` |
 
-The app builds a local DuckDB database on your own computer. The UniMorph data and the database are **not stored in this GitHub repository**.
-
 ---
 
 ## What this tool does
