@@ -40,9 +40,8 @@ Important: the tool retrieves forms that are available in UniMorph. It does not 
 ---
 ## I now host the SHINY APP online
 
-[please click here](https://unimorphr-samfak-compci.apps.k8s.gu.se)
+[here](https://unimorphr-samfak-compci.apps.k8s.gu.se)
 
----
 
 ## ALTERNATIVE: Installation and start
 
