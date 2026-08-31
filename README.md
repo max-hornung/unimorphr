@@ -38,12 +38,9 @@ deu  | gehen | geht  | V;IND;PRS;3;SG
 Important: the tool retrieves forms that are available in UniMorph. It does not generate missing forms. If a lemma is not present in UniMorph for a given language, the result will be empty. Again, you can find the legend for the different inflectional features [here](https://unimorph.github.io/schema/).
 
 ---
-## I now host the SHINY APP online
+## I now host the shiny app [online](https://unimorphr-samfak-compci.apps.k8s.gu.se)
 
-[here](https://unimorphr-samfak-compci.apps.k8s.gu.se)
-
-
-## ALTERNATIVE: Installation and start
+### ALTERNATIVE: Installation and start
 
 You do **not** need RStudio to use the app. Currently, the local download only runs on macOS (I am trying to fix that). I alos host this version on an external server.  
 
