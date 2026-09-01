@@ -1,4 +1,4 @@
-# UniMorphR: Local UniMorph Lemma Lookup
+# UniMorphR: UniMorph Lemma Lookup
 
 This repository provides a simple local R/Shiny interface for looking up inflected word forms from [UniMorph](https://unimorph.github.io/).
 
